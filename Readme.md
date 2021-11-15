@@ -1,3 +1,5 @@
+![Rust build and tests](https://github.com/TomasKralCZ/learntorrent/actions/workflows/rust.yml/badge.svg)
+
 https://wiki.theory.org/BitTorrentSpecification
 
 https://www.seanjoflynn.com/research/bittorrent.html
