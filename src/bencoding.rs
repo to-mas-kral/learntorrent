@@ -63,7 +63,7 @@ impl fmt::Debug for BeValue {
     }
 }
 
-// TODO: should check for file size / recursion depth, so the parser doesn't crash or allocate too much memory
+// TODO: should check for recursion depth
 
 pub struct BeParser<'s> {
     src: &'s [u8],
@@ -90,58 +90,31 @@ impl<'s> BeParser<'s> {
         }
     }
 
-    /** i<integer encoded in base ten ASCII>e **/
+    /// i<integer encoded in base ten ASCII>e
     fn parse_int(&mut self) -> Result<i64, BeError> {
         self.next().unwrap(); // Skip the "i"
 
-        // TODO: don't allocate here
-        let mut digits = String::with_capacity(12);
+        let minus_one = if self.peek() == Some(&b'-') {
+            self.next();
+            -1
+        } else {
+            1
+        };
 
-        loop {
-            match self.next() {
-                Some(b) => match b {
-                    b if b.is_ascii_digit() || *b == b'-' => digits.push(*b as char),
-                    b'e' => break,
-                    _ => {
-                        return Err(BeError::InvalidInt(
-                            digits,
-                            "next byte wasn't a valid integer character",
-                        ));
-                    }
-                },
-                None => return Err(BeError::UnexpectedEnd),
-            }
-        }
+        let num = i64::try_from(self.parse_digits()?)?;
 
-        if digits.is_empty() {
-            return Err(BeError::InvalidInt(digits, "integer is empty"));
-        }
+        self.expect(b'e', "Expected end of integer")?;
 
-        // Manual number conversion would be better
-        digits
-            .parse::<i64>()
-            .map_err(|_| BeError::InvalidInt(digits, "not a proper integer"))
+        Ok(minus_one * num)
     }
 
     fn parse_str(&mut self) -> Result<Vec<u8>, BeError> {
-        // TODO: don't allocate here
-        let mut digits = String::with_capacity(4);
-
-        loop {
-            match self.peek() {
-                Some(b) if b.is_ascii_digit() => digits.push(*self.next().unwrap() as char),
-                Some(_) => break,
-                None => return Err(BeError::UnexpectedEnd),
-            }
-        }
+        let len = self.parse_digits()?;
 
         self.expect(b':', "Expected a colon while parsing a string")?;
 
-        let len = digits
-            .parse::<u64>()
-            .map_err(|_| BeError::InvalidStrLen(digits, "not a proper string length"))?;
-
-        let mut string = Vec::new();
+        // TODO: have some allocation limits
+        let mut string = Vec::with_capacity(len as usize);
         for _ in 0..len {
             match self.next() {
                 Some(b) => string.push(*b),
@@ -150,6 +123,18 @@ impl<'s> BeParser<'s> {
         }
 
         Ok(string)
+    }
+
+    fn parse_digits(&mut self) -> Result<u64, BeError> {
+        let digits = self.take_while(|b| b.is_ascii_digit())?;
+        // This shouldn't panic since we are only accepting ASCII digits...
+        let digits = std::str::from_utf8(digits).unwrap();
+
+        let num = digits.parse::<u64>().map_err(|_| {
+            BeError::InvalidStrLen(digits.to_string(), "not a proper string length")
+        })?;
+
+        Ok(num)
     }
 
     fn parse_list(&mut self) -> Result<Vec<BeValue>, BeError> {
@@ -173,9 +158,7 @@ impl<'s> BeParser<'s> {
         Ok(list)
     }
 
-    /** d<bencoded string><bencoded element>e
-     * dictionary keys must be valid UTF-8
-     * **/
+    /// d<bencoded string><bencoded element>e
     fn parse_dict(&mut self) -> Result<Dict, BeError> {
         self.next().unwrap(); // Skip the "d"
 
@@ -189,6 +172,7 @@ impl<'s> BeParser<'s> {
                         break;
                     }
                     _ => {
+                        // TODO: verify if dict keys have to be UTF-8 or just bytes
                         let key = String::from_utf8(self.parse_str()?)?;
                         let val = self.parse_value()?;
 
@@ -201,6 +185,22 @@ impl<'s> BeParser<'s> {
         }
 
         Ok(dict)
+    }
+
+    fn take_while(&mut self, condition: fn(u8) -> bool) -> Result<&[u8], BeError> {
+        let mut count = 0;
+
+        loop {
+            match self.src.get(count) {
+                Some(b) if condition(*b) => count += 1,
+                Some(_) => {
+                    let (head, tail) = self.src.split_at(count);
+                    self.src = tail;
+                    return Ok(head);
+                }
+                None => return Err(BeError::UnexpectedEnd),
+            }
+        }
     }
 
     fn expect(&mut self, expected: u8, error_msg: &'static str) -> Result<(), BeError> {
@@ -232,9 +232,9 @@ pub enum BeError {
     #[error("Initial element character should be either a digit, 'i', 'l' or 'd', got: {0}")]
     InvalidInitialByte(u8),
     #[error("Found an invalid integer: {0}, cause: '{0}'")]
-    InvalidInt(String, &'static str),
-    #[error("Found an invalid string length: {0}, cause: '{0}'")]
     InvalidStrLen(String, &'static str),
+    #[error("Invalid number")]
+    InvalidNum(#[from] std::num::TryFromIntError),
     #[error("{0}, got: {1:?}")]
     Expected(&'static str, Option<u8>),
     #[error("Dictionary key must be a valid UTF-8 string. {0}")]
