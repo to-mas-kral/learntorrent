@@ -5,4 +5,8 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11" }
+sha-1 = "0.9.8"
+urlencoding = "2.1.0"
+rand = "0.8"
 thiserror = "1"
