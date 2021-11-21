@@ -47,7 +47,7 @@ pub struct TrackerResponse {
     interval: u64,
     complete: u64,
     incomplete: u64,
-    peers: Vec<SocketAddrV4>,
+    pub peers: Vec<SocketAddrV4>,
 }
 
 impl TrackerResponse {
