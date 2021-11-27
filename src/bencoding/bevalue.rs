@@ -15,6 +15,7 @@ pub enum BeValue {
     List(List),
 }
 
+// String needlessly allocates, but this is not performance-critical code
 pub type Str = Vec<u8>;
 pub type Int = i64;
 pub type List = Vec<BeValue>;

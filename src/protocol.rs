@@ -9,6 +9,7 @@ impl Handshake {
         let mut handshake = [0; 68];
         handshake[0] = 0x13;
         handshake[1..20].copy_from_slice("BitTorrent protocol".as_bytes());
+        // Extensions, currently all 0
         handshake[20..28].fill(0);
         handshake[28..48].copy_from_slice(&metainfo.info_hash);
         handshake[48..68].copy_from_slice(client_id);
