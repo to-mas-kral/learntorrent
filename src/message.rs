@@ -1,12 +1,11 @@
 use bytes::{Buf, BytesMut};
 use thiserror::Error;
-use tokio::net::TcpStream;
-use tokio_util::codec::{Decoder, Framed};
+use tokio_util::codec::{Decoder, Encoder};
 
 /// All of the remaining messages in the protocol take the form of \<length prefix>\<message ID>\<payload>.
 /// The length prefix is a four byte big-endian value. The message ID is a single decimal byte.
 /// The payload is message dependent.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Message {
     /// keep-alive: <len=0000>
     KeepAlive,
@@ -63,7 +62,7 @@ impl Decoder for MessageCodec {
         }
 
         // Read length marker.
-        // ! We can't advance here because we don't know if we received the whole message !
+        // We can't advance here because we don't know if we received the whole message !
         let mut len = [0u8; LEN_MARKER_SIZE];
         len.copy_from_slice(&src[..LEN_MARKER_SIZE]);
         let len = u32::from_be_bytes(len) as usize;
@@ -142,18 +141,147 @@ impl Decoder for MessageCodec {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum MessageEncodeErr {
+    #[error("IO error: '{0}'")]
+    Io(#[from] std::io::Error),
+}
+
+impl Encoder<Message> for MessageCodec {
+    type Error = MessageEncodeErr;
+
+    fn encode(&mut self, msg: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let put_u32 = |val: u32, dst: &mut BytesMut| dst.extend_from_slice(&val.to_be_bytes());
+        let put_u8 = |val: u8, dst: &mut BytesMut| dst.extend_from_slice(&[val]);
+
+        match msg {
+            Message::KeepAlive => put_u32(0, dst),
+            Message::Choke => {
+                put_u32(1, dst);
+                put_u8(0, dst);
+            }
+            Message::Unchoke => {
+                put_u32(1, dst);
+                put_u8(1, dst);
+            }
+            Message::Interested => {
+                put_u32(1, dst);
+                put_u8(2, dst);
+            }
+            Message::NotInterested => {
+                put_u32(1, dst);
+                put_u8(3, dst);
+            }
+            Message::Have(id) => {
+                put_u32(5, dst);
+                put_u8(4, dst);
+                put_u32(id, dst);
+            }
+            Message::Bitfield(bitfield) => {
+                let len = 1 + bitfield.len();
+                put_u32(len as u32, dst);
+                put_u8(5, dst);
+                dst.extend_from_slice(&bitfield);
+            }
+            Message::Request { index, begin, len } => {
+                put_u32(13, dst);
+                put_u8(6, dst);
+                put_u32(index, dst);
+                put_u32(begin, dst);
+                put_u32(len, dst);
+            }
+            Message::Piece {
+                index,
+                begin,
+                block,
+            } => {
+                let len = 9 + block.len();
+                put_u32(len as u32, dst);
+                put_u8(7, dst);
+                put_u32(index, dst);
+                put_u32(begin, dst);
+                dst.extend_from_slice(&block);
+            }
+            Message::Cancel { index, begin, len } => {
+                put_u32(13, dst);
+                put_u8(8, dst);
+                put_u32(index, dst);
+                put_u32(begin, dst);
+                put_u32(len, dst);
+            }
+        };
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test_message {
     use bytes::BufMut;
 
     use super::*;
+    #[test]
+    fn test_roundtrip() {
+        let roundtrip = |msg: Message| {
+            let mut codec = MessageCodec;
+            let mut dst = BytesMut::new();
+
+            codec.encode(msg.clone(), &mut dst).unwrap();
+            let res = codec.decode(&mut dst).unwrap().unwrap();
+
+            assert_eq!(msg, res);
+        };
+
+        let keep_alive = Message::KeepAlive;
+        let choke = Message::Choke;
+        let unchoke = Message::Unchoke;
+        let interested = Message::Interested;
+        let not_interested = Message::NotInterested;
+        let have = Message::Have(162534);
+
+        let bitfield = vec![1u8, 6, 2, 5, 3, 4];
+        let bitfield = Message::Bitfield(BytesMut::from(&bitfield[..]));
+
+        let request = Message::Request {
+            index: 123,
+            begin: 456,
+            len: 789,
+        };
+
+        let block = vec![1u8, 2, 3, 4, 5];
+        let piece = Message::Piece {
+            index: 123,
+            begin: 456,
+            block: BytesMut::from(&block[..]),
+        };
+
+        let cancel = Message::Cancel {
+            index: 123,
+            begin: 456,
+            len: 789,
+        };
+
+        for m in [
+            keep_alive,
+            choke,
+            unchoke,
+            interested,
+            not_interested,
+            have,
+            bitfield,
+            request,
+            piece,
+            cancel,
+        ] {
+            roundtrip(m);
+        }
+    }
 
     #[test]
     fn test_decode() {
         let mut decoder = MessageCodec;
 
         let mut bytes = BytesMut::new();
-        // TODO: replace with Encoder once thta's done
         #[rustfmt::skip]
         bytes.put_slice(&[
             //len          id    payload
@@ -161,6 +289,8 @@ mod test_message {
             0, 0, 0, 1,    0,
             0, 0, 0, 1,    2,
             0, 0, 0, 5,    4,    0, 0, 48, 57,
+            0, 0, 0, 1,    1,
+            0, 0, 0, 1,    3,
         ]);
 
         let res = decoder.decode(&mut bytes).unwrap();
@@ -171,6 +301,10 @@ mod test_message {
         assert_eq!(res, Some(Message::Interested));
         let res = decoder.decode(&mut bytes).unwrap();
         assert_eq!(res, Some(Message::Have(12345)));
+        let res = decoder.decode(&mut bytes).unwrap();
+        assert_eq!(res, Some(Message::Unchoke));
+        let res = decoder.decode(&mut bytes).unwrap();
+        assert_eq!(res, Some(Message::NotInterested));
     }
 
     #[test]
@@ -196,20 +330,40 @@ mod test_message {
     }
 
     #[test]
+    fn test_decode_request() {
+        let mut decoder = MessageCodec;
+
+        let mut bytes = BytesMut::new();
+        bytes.put_slice(&[0, 0, 0, 13, 6]);
+        bytes.put_slice(&3u32.to_be_bytes());
+        bytes.put_slice(&420u32.to_be_bytes());
+        bytes.put_slice(&12345u32.to_be_bytes());
+
+        let res = decoder.decode(&mut bytes).unwrap();
+        assert_eq!(
+            res,
+            Some(Message::Request {
+                index: 3,
+                begin: 420,
+                len: 12345,
+            })
+        );
+    }
+
+    #[test]
     fn test_decode_piece() {
         let mut decoder = MessageCodec;
 
         let mut bytes = BytesMut::new();
-        #[rustfmt::skip]
-        bytes.put_slice(&[
-            0, 0, 0, 15,    7,
-            0, 4, 0, 0,
-            2, 0, 0, 0,
-            6, 5, 4, 3, 2, 1
-        ]);
-        let res = decoder.decode(&mut bytes).unwrap();
+        bytes.put_slice(&[0, 0, 0, 15, 7]);
+        bytes.put_slice(&262144u32.to_be_bytes());
+        bytes.put_slice(&33554432u32.to_be_bytes());
 
         let block = vec![6u8, 5, 4, 3, 2, 1];
+        bytes.put_slice(&block);
+
+        let res = decoder.decode(&mut bytes).unwrap();
+
         let block = BytesMut::from(&block[..]);
         assert_eq!(
             res,

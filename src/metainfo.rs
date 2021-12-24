@@ -50,6 +50,10 @@ impl MetaInfo {
             announce,
         })
     }
+
+    pub fn get_num_pieces(&self) -> u64 {
+        (self.total_length as f64 / self.piece_length as f64).ceil() as u64
+    }
 }
 
 fn get_hash(src: &[u8]) -> Vec<u8> {

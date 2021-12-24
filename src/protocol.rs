@@ -1,12 +1,14 @@
 use crate::{metainfo::MetaInfo, TrError};
 
 pub struct Handshake {
-    pub inner: [u8; 68],
+    pub inner: Vec<u8>,
 }
 
 impl Handshake {
+    const HANDSHAKE_LEN: usize = 68;
+
     pub fn new(client_id: &[u8], metainfo: &MetaInfo) -> Self {
-        let mut handshake = [0; 68];
+        let mut handshake = vec![0; Self::HANDSHAKE_LEN];
         handshake[0] = 0x13;
         handshake[1..20].copy_from_slice("BitTorrent protocol".as_bytes());
         // Extensions, currently all 0
@@ -18,9 +20,12 @@ impl Handshake {
     }
 
     pub fn new_empty() -> Self {
-        Handshake { inner: [0; 68] }
+        Handshake {
+            inner: vec![0; Self::HANDSHAKE_LEN],
+        }
     }
 
+    /// Check if info hash matches, then returns the peer id
     pub fn validate<'p>(&self, peer: &'p Self) -> Result<&'p [u8], TrError> {
         if self.inner[0..48] != peer.inner[0..48] {
             return Err(TrError::InvalidHandshake);
