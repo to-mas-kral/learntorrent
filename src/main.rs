@@ -21,7 +21,7 @@ mod tracker;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::WARN)
         .init();
 
     let file_contents = fs::read("raspios-2021-10-30-bullseye-armhf.zip.torrent")
@@ -56,11 +56,11 @@ async fn main() {
 
     let handshake = Arc::new(Handshake::new(&client_id, &metainfo));
 
-    let (pm, pm_tx, register_rx) = PieceManager::new();
+    let (pm, pm_tx, register_rx) = PieceManager::new(metainfo.num_pieces());
 
     let mut tasks = Vec::new();
 
-    tasks.push(tokio::spawn(piece_manager::piece_manager(pm)));
+    tasks.push(tokio::spawn(PieceManager::piece_manager(pm)));
 
     for socket_addr in response.peers {
         let handshake = Arc::clone(&handshake);
@@ -102,6 +102,8 @@ pub enum TrError {
     InvalidHandshake,
     #[error("Received an invalid message: '{0}'")]
     InvalidMessage(#[from] MessageDecoderErr),
-    #[error("Dev")]
-    CatchAll,
+    #[error("Flume error")]
+    FlumeErr(#[from] flume::SendError<PmMessage>),
+    #[error("Flume error")]
+    FlumeErr2(#[from] flume::RecvError),
 }

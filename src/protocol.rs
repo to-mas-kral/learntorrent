@@ -31,6 +31,6 @@ impl Handshake {
             return Err(TrError::InvalidHandshake);
         }
 
-        return Ok(&peer.inner[48..68]);
+        Ok(&peer.inner[48..68])
     }
 }

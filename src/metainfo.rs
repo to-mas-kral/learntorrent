@@ -5,10 +5,15 @@ use crate::bencoding::bevalue::{BeValue, ResponseParseError};
 
 #[derive(Debug)]
 pub struct MetaInfo {
+    /// Tracker URL
     pub announce: String,
+    /// Hash of the info dictionary
     pub info_hash: Vec<u8>,
+    /// Number of bytes of 1 piece
     pub piece_length: u64,
+    /// Length of the file in bytes (only single-file mode now)
     pub total_length: u64,
+    /// Filename
     pub name: String,
     pub piece_hashes: PieceHashes,
     // TODO: private
@@ -51,8 +56,9 @@ impl MetaInfo {
         })
     }
 
-    pub fn get_num_pieces(&self) -> u64 {
-        (self.total_length as f64 / self.piece_length as f64).ceil() as u64
+    /// The number of pieces is 0-indexed !
+    pub fn num_pieces(&self) -> u32 {
+        (self.total_length as f64 / self.piece_length as f64).ceil() as u32
     }
 }
 
