@@ -143,13 +143,11 @@ impl Decoder for MessageCodec {
     }
 }
 
-#[derive(Debug)]
-pub struct MessageEncodeErr;
-
-impl From<std::io::Error> for MessageEncodeErr {
-    fn from(_: std::io::Error) -> Self {
-        MessageEncodeErr
-    }
+// TODO: why does MessageEncodeErr have to implement From<io:Error> ??
+#[derive(Error, Debug)]
+pub enum MessageEncodeErr {
+    #[error("IO error: '{0}'")]
+    MessageEncodeErr(#[from] std::io::Error),
 }
 
 impl Encoder<Message> for MessageCodec {

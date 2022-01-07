@@ -43,7 +43,7 @@ pub fn gen_client_id() -> Vec<u8> {
 
 #[derive(Debug)]
 pub struct TrackerResponse {
-    min_interval: u64,
+    //min_interval: u64,
     interval: u64,
     complete: u64,
     incomplete: u64,
@@ -52,13 +52,14 @@ pub struct TrackerResponse {
 
 impl TrackerResponse {
     pub fn from_bevalue(mut be: BeValue) -> TrResult<Self> {
-        let mut resp = be.take_dict()?;
+        let resp = be.get_dict()?;
 
-        let min_interval = resp.expect("min interval")?.take_uint()?;
-        let interval = resp.expect("interval")?.take_uint()?;
-        let complete = resp.expect("complete")?.take_uint()?;
-        let incomplete = resp.expect("incomplete")?.take_uint()?;
-        let peers = resp.expect("peers")?.take_str()?;
+        // TODO: min_interval is optional
+        //let min_interval = resp.expect("min interval")?.get_uint()?;
+        let interval = resp.expect("interval")?.get_uint()?;
+        let complete = resp.expect("complete")?.get_uint()?;
+        let incomplete = resp.expect("incomplete")?.get_uint()?;
+        let peers = resp.expect("peers")?.get_str()?;
 
         if peers.len() % 6 != 0 {
             return Err(TrError::InvalidPeersLen(peers.len()));
@@ -75,7 +76,7 @@ impl TrackerResponse {
             .collect();
 
         Ok(TrackerResponse {
-            min_interval,
+            //min_interval,
             interval,
             complete,
             incomplete,

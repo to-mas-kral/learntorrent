@@ -37,6 +37,10 @@ impl Dict {
             .get_mut(k)
             .ok_or_else(|| ResponseParseError::ValNotContained(k.to_string()))
     }
+
+    pub fn get_mut(&mut self, k: &str) -> Option<&mut BeValue> {
+        self.vals.get_mut(k)
+    }
 }
 
 impl BeValue {
@@ -44,35 +48,35 @@ impl BeValue {
         BeParser::parse_with(src)
     }
 
-    pub fn take_dict(&mut self) -> ReponseParseResult<Dict> {
+    pub fn get_dict(&mut self) -> ReponseParseResult<&mut Dict> {
         match self {
-            BeValue::Dict(d) => Ok(std::mem::take(d)),
+            BeValue::Dict(d) => Ok(d),
             t => Err(ResponseParseError::InvalidType("dictionary", t.label())),
         }
     }
 
-    pub fn take_str(&mut self) -> ReponseParseResult<Str> {
+    pub fn get_list(&mut self) -> ReponseParseResult<&mut List> {
         match self {
-            BeValue::Str(s) => Ok(std::mem::take(s)),
+            BeValue::List(l) => Ok(l),
+            t => Err(ResponseParseError::InvalidType("dictionary", t.label())),
+        }
+    }
+
+    pub fn get_str(&mut self) -> ReponseParseResult<&mut Str> {
+        match self {
+            BeValue::Str(s) => Ok(s),
             t => Err(ResponseParseError::InvalidType("string", t.label())),
         }
     }
 
-    pub fn take_str_utf8(&mut self) -> ReponseParseResult<String> {
+    pub fn get_str_utf8(&mut self) -> ReponseParseResult<String> {
         match self {
             BeValue::Str(s) => Ok(String::from_utf8(s.to_vec())?),
             t => Err(ResponseParseError::InvalidType("string", t.label())),
         }
     }
 
-    pub fn take_int(&mut self) -> ReponseParseResult<Int> {
-        match self {
-            BeValue::Int(i) => Ok(*i),
-            t => Err(ResponseParseError::InvalidType("integer", t.label())),
-        }
-    }
-
-    pub fn take_uint(&mut self) -> ReponseParseResult<u64> {
+    pub fn get_uint(&mut self) -> ReponseParseResult<u64> {
         match self {
             BeValue::Int(i) => Ok(u64::try_from(*i)?),
             t => Err(ResponseParseError::InvalidType("integer", t.label())),
@@ -81,6 +85,7 @@ impl BeValue {
 
     const INDENT_LEN: usize = 4;
 
+    // TODO: better bevalue formatting code
     pub fn inner_fmt(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         match self {
             BeValue::Str(s) => {
@@ -133,7 +138,7 @@ pub type ReponseParseResult<T> = Result<T, ResponseParseError>;
 
 #[derive(Error, Debug)]
 pub enum ResponseParseError {
-    #[error("Attempted to take a value of type '{0}' when 'self' is '{1}'")]
+    #[error("Attempted to extract a value of type '{0}' when 'self' is '{1}'")]
     InvalidType(&'static str, &'static str),
     #[error("The value of key: '{0}' is not contained in this dictionary")]
     ValNotContained(String),

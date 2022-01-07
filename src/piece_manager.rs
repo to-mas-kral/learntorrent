@@ -5,23 +5,23 @@ use std::collections::{hash_map::Entry, HashMap};
 pub type TaskId = u32;
 pub type PieceId = u32;
 
-pub type TaskInfo = (TaskId, Receiver<PieceId>);
+pub type TaskInfo = (TaskId, Receiver<PieceMsg>);
 
 pub struct PieceManager {
     next_id: TaskId,
-    peers: HashMap<TaskId, Sender<PieceId>>,
+    peers: HashMap<TaskId, Sender<PieceMsg>>,
     /// Map of which peers have which pieces
     peers_pieces: HashMap<TaskId, BitField>,
     piece_queue: PieceQueue,
     /// Receives all kinds of messages
-    rx: Receiver<PmMessage>,
+    rx: Receiver<PmMsg>,
     /// Sends TaskIDd and PieceId rx for a new task
     register_tx: Sender<TaskInfo>,
     num_pieces: u32,
 }
 
 impl PieceManager {
-    pub fn new(num_pieces: u32) -> (Self, Sender<PmMessage>, Receiver<TaskInfo>) {
+    pub fn new(num_pieces: u32) -> (Self, Sender<PmMsg>, Receiver<TaskInfo>) {
         let (tx, rx) = flume::unbounded();
         let (register_tx, register_rx) = flume::bounded(1);
 
@@ -38,7 +38,7 @@ impl PieceManager {
         (s, tx, register_rx)
     }
 
-    pub fn add_peer(&mut self) -> (TaskId, Receiver<PieceId>) {
+    pub fn add_peer(&mut self) -> (TaskId, Receiver<PieceMsg>) {
         let task_id = self.next_id;
         self.next_id += 1;
 
@@ -52,7 +52,7 @@ impl PieceManager {
         loop {
             let msg = self.rx.recv_async().await.expect("Shouldn't panic ?");
             match msg {
-                PmMessage::Have(task_id, piece_id) => {
+                PmMsg::Have(task_id, piece_id) => {
                     tracing::info!("Task {} has a new piece: {}", task_id, piece_id);
 
                     let bitfield = if let Entry::Vacant(e) = self.peers_pieces.entry(task_id) {
@@ -64,48 +64,51 @@ impl PieceManager {
 
                     bitfield.set_piece(piece_id);
                 }
-                PmMessage::HaveBitfield(task_id, bitfield) => {
+                PmMsg::HaveBitfield(task_id, bitfield) => {
                     tracing::info!("Task {} has a bitfield", task_id);
 
                     let bitfield = BitField::new(bitfield);
                     self.peers_pieces.insert(task_id, bitfield);
                 }
-                PmMessage::Pick(task_id) => {
+                PmMsg::Pick(task_id) => {
                     tracing::info!("Task {} is requesting a piece pick", task_id);
 
-                    // TODO: don't have any pieces from peer
+                    // TODO: what if we don't have any pieces from peer
                     let available_pieces = self.peers_pieces.get(&task_id).unwrap();
                     let piece = self.piece_queue.next(available_pieces);
-                    tracing::warn!("{:?} - {:?}", piece, &self.piece_queue);
 
-                    if let Some(piece) = piece {
-                        let peer_sender = self.peers.get(&task_id).expect("Shouldn't happen");
-                        peer_sender
-                            .send_async(piece)
-                            .await
-                            .expect("Shouldn't happen");
-                    }
+                    let peer_sender = self.peers.get(&task_id).expect("Shouldn't happen");
+                    peer_sender
+                        .send_async(piece)
+                        .await
+                        .expect("Shouldn't happen");
                 }
-                PmMessage::Register => {
+                PmMsg::Register => {
                     let task_info = self.add_peer();
                     self.register_tx
                         .send_async(task_info)
                         .await
                         .expect("Shouldn't panic ?");
                 }
+                PmMsg::PieceRestart(pid) => self.piece_queue.requeue_piece(pid),
             }
         }
     }
 }
 
+pub type PieceMsg = Option<PieceId>;
+
 #[derive(Debug)]
-pub enum PmMessage {
+pub enum PmMsg {
     /// Peer task received a Have message
     Have(TaskId, PieceId),
     /// Peer task received a Bitfield message
     HaveBitfield(TaskId, BytesMut),
     /// Peer task requested a piece to be picked for it
     Pick(TaskId),
+    /// Peer task couldn't validate or finish downloading the piece
+    PieceRestart(PieceId),
+
     /// Main task asks for a new peer task to be registered
     Register,
 }
@@ -159,7 +162,10 @@ impl PieceQueue {
     }
 
     /// If a piece wasn't downloaded successfully, add it to the queue again
-    fn requeue_piece(&mut self, id: PieceId) {}
+    fn requeue_piece(&mut self, id: PieceId) {
+        // TODO: could do something smarter here, but the fail-rate is pretty low
+        self.blocks.push((id, id));
+    }
 }
 
 struct BitField {
