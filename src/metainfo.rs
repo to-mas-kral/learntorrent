@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct MetaInfo {
+pub struct Metainfo {
     /// Tracker URL
     pub announce: String,
     /// Hash of the info dictionary
@@ -19,11 +19,10 @@ pub struct MetaInfo {
     /// Filename
     pub name: String,
     pub piece_hashes: Vec<u8>,
-    // TODO: private
-    // TODO: other optional fields
+    // TODO: MD5sum
 }
 
-impl MetaInfo {
+impl Metainfo {
     pub fn from_src_be(src: &[u8], mut be: BeValue) -> MiResult<Self> {
         let torrent = be.get_dict()?;
 
@@ -58,7 +57,7 @@ impl MetaInfo {
             return Err(MiError::InvalidPiecesLen(piece_hashes.len()));
         }
 
-        Ok(MetaInfo {
+        Ok(Metainfo {
             info_hash,
             piece_length,
             total_length,
@@ -75,16 +74,16 @@ impl MetaInfo {
     }
 
     /// The number of pieces is 0-indexed !
-    pub fn num_pieces(&self) -> u32 {
+    pub fn piece_count(&self) -> u32 {
         (self.total_length as f64 / self.piece_length as f64).ceil() as u32
     }
 
     /// Returns the piece size for a specific piece
     pub fn get_piece_size(&self, piece: PieceId) -> u32 {
-        if piece != self.num_pieces() - 1 {
+        if piece != self.piece_count() - 1 {
             self.piece_length as u32
         } else {
-            let prev_pieces_len = (self.num_pieces() - 1) * self.piece_length;
+            let prev_pieces_len = (self.piece_count() - 1) * self.piece_length;
             self.total_length as u32 - prev_pieces_len
         }
     }

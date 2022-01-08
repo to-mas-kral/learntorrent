@@ -5,7 +5,7 @@ use tokio::fs;
 use bencoding::bevalue::BeValue;
 use io::Io;
 use p2p::{Handshake, PeerTask};
-use piece_manager::{PieceManager, PmMsg};
+use piece_manager::PieceManager;
 use tracker::ClientState;
 
 mod bencoding;
@@ -18,16 +18,15 @@ mod tracker;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
-    //let file_contents = fs::read("raspios-2021-10-30-bullseye-armhf.zip.torrent")
     let file_contents = fs::read("2021-10-30-raspios-bullseye-armhf.zip.torrent")
         .await
-        .unwrap();
-    let contents = BeValue::from_bytes(&file_contents).unwrap();
-
-    let metainfo = metainfo::MetaInfo::from_src_be(&file_contents, contents).unwrap();
+        .expect("Couldn't read the torrent file");
+    let contents = BeValue::from_bytes(&file_contents).expect("Couldn't parse the torrent file");
+    let metainfo = metainfo::Metainfo::from_src_be(&file_contents, contents)
+        .expect("Couldn't parse the torrent file");
 
     tracing::debug!("Parsed torrent metainfo");
 
@@ -56,8 +55,9 @@ async fn main() {
 
     let handshake = Arc::new(Handshake::new(&client_id, &metainfo));
 
-    let (pm, pm_tx, register_rx) = PieceManager::new(metainfo.num_pieces());
-    let (io, io_tx) = Io::new(Arc::clone(&metainfo));
+    let (io, io_sender) = Io::new(Arc::clone(&metainfo));
+    let (pm, pm_sender, register_recv, notify_recv) =
+        PieceManager::new(metainfo.piece_count(), io_sender.clone());
 
     let mut tasks = Vec::new();
 
@@ -66,31 +66,24 @@ async fn main() {
 
     for socket_addr in response.peers {
         let handshake = Arc::clone(&handshake);
-        let pm_sender = pm_tx.clone();
-
-        pm_tx
-            .send_async(PmMsg::Register)
-            .await
-            .expect("Shouldn't panic ?");
-        let (task_id, piece_rx) = register_rx.recv_async().await.expect("Shouldn't panic ?");
-
-        let peer_task = PeerTask::new(
-            task_id,
-            socket_addr,
-            handshake,
-            pm_sender,
-            piece_rx,
-            io_tx.clone(),
-            Arc::clone(&metainfo),
-        );
+        let metainfo = Arc::clone(&metainfo);
+        let pm_sender = pm_sender.clone();
+        let register_recv = register_recv.clone();
+        let notify_recv = notify_recv.clone();
 
         tasks.push(tokio::spawn(async move {
-            match PeerTask::create(peer_task).await {
-                Ok(_) => (),
-                Err(e) => {
-                    tracing::info!("{:?}", e);
-                }
-            };
+            if let Err(e) = PeerTask::create(
+                socket_addr,
+                handshake,
+                metainfo,
+                pm_sender,
+                register_recv,
+                notify_recv,
+            )
+            .await
+            {
+                tracing::info!("{:?}", e);
+            }
         }));
     }
 

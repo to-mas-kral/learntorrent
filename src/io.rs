@@ -5,22 +5,22 @@ use tokio::{
     io::{AsyncSeekExt, AsyncWriteExt, BufWriter},
 };
 
-use crate::{metainfo::MetaInfo, p2p::CompletedBlockRequest, piece_manager::PieceId};
+use crate::{metainfo::Metainfo, p2p::CompletedBlockRequest, piece_manager::PieceId};
 
 pub struct Io {
     rx: flume::Receiver<PieceIoMsg>,
-    metainfo: Arc<MetaInfo>,
-    counter: u32,
+    metainfo: Arc<Metainfo>,
+    missing_pieces: u32,
 }
 
 impl Io {
-    pub fn new(metainfo: Arc<MetaInfo>) -> (Self, flume::Sender<PieceIoMsg>) {
-        let (tx, rx) = flume::bounded(10000);
+    pub fn new(metainfo: Arc<Metainfo>) -> (Self, flume::Sender<PieceIoMsg>) {
+        let (tx, rx) = flume::bounded(100);
 
         let s = Self {
             rx,
+            missing_pieces: metainfo.piece_count(),
             metainfo,
-            counter: 0,
         };
 
         (s, tx)
@@ -35,6 +35,11 @@ impl Io {
         let mut writer = BufWriter::with_capacity(10 * 1024 * 1024, file);
 
         loop {
+            if self.missing_pieces == 0 {
+                tracing::info!("Exiting - all pieces have been saved to disk");
+                return;
+            }
+
             let piece_msg = self.rx.recv_async().await;
             match piece_msg {
                 Ok(pm) => {
@@ -53,12 +58,14 @@ impl Io {
 
                     writer.flush().await.expect("IO error");
 
-                    tracing::info!("Piece '{}' written to file", pm.piece_id);
+                    tracing::debug!("Piece '{}' written to file", pm.piece_id);
 
-                    self.counter += 1;
-                    tracing::warn!("Pieces left: {}", self.metainfo.num_pieces() - self.counter);
+                    self.missing_pieces -= 1;
                 }
-                Err(_) => break,
+                Err(_) => {
+                    // TODO: this should only happen if there's an internal error in the Piece Manager
+                    return;
+                }
             }
         }
     }

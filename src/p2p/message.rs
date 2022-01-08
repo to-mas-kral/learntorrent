@@ -104,7 +104,6 @@ impl Decoder for MessageCodec {
                     }
                     // Bitfield
                     (len, 5) if len > 1 => {
-                        // TODO: don't panic if block is shorter than len
                         let bitfield = src.split_to(len - 1);
                         Ok(Some(Message::Bitfield(bitfield)))
                     }
@@ -119,7 +118,6 @@ impl Decoder for MessageCodec {
                     (len, 7) => {
                         let index = src.get_u32();
                         let begin = src.get_u32();
-                        // TODO: don't panic if block is shorter than len
                         let block = src.split_to(len - 9);
                         Ok(Some(Message::Piece {
                             index,

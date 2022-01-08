@@ -4,11 +4,11 @@ use thiserror::Error;
 
 use crate::{
     bencoding::bevalue::{BeValue, ResponseParseError},
-    metainfo::MetaInfo,
+    metainfo::Metainfo,
 };
 
 pub fn build_announce_url(
-    mi: &MetaInfo,
+    mi: &Metainfo,
     client_id: &[u8],
     uploaded: u64,
     downloaded: u64,
@@ -43,10 +43,11 @@ pub fn gen_client_id() -> Vec<u8> {
 
 #[derive(Debug)]
 pub struct TrackerResponse {
+    // TODO: actually make use of tracker data
     //min_interval: u64,
-    interval: u64,
-    complete: u64,
-    incomplete: u64,
+    //interval: u64,
+    //complete: u64,
+    //incomplete: u64,
     pub peers: Vec<SocketAddrV4>,
 }
 
@@ -56,9 +57,9 @@ impl TrackerResponse {
 
         // TODO: min_interval is optional
         //let min_interval = resp.expect("min interval")?.get_uint()?;
-        let interval = resp.expect("interval")?.get_uint()?;
-        let complete = resp.expect("complete")?.get_uint()?;
-        let incomplete = resp.expect("incomplete")?.get_uint()?;
+        //let interval = resp.expect("interval")?.get_uint()?;
+        //let complete = resp.expect("complete")?.get_uint()?;
+        //let incomplete = resp.expect("incomplete")?.get_uint()?;
         let peers = resp.expect("peers")?.get_str()?;
 
         if peers.len() % 6 != 0 {
@@ -77,9 +78,9 @@ impl TrackerResponse {
 
         Ok(TrackerResponse {
             //min_interval,
-            interval,
-            complete,
-            incomplete,
+            //interval,
+            //complete,
+            //incomplete,
             peers,
         })
     }
@@ -98,16 +99,16 @@ pub enum TrError {
 #[derive(Clone, Copy)]
 pub enum ClientState {
     Started,
-    Stopped,
-    Paused,
+    //Stopped,
+    //Paused,
 }
 
 impl ClientState {
     pub fn to_str(self) -> &'static str {
         match self {
             ClientState::Started => "started",
-            ClientState::Stopped => "stopped",
-            ClientState::Paused => "paused",
+            //ClientState::Stopped => "stopped",
+            //ClientState::Paused => "paused",
         }
     }
 }
