@@ -18,17 +18,18 @@ mod tracker;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    let file_contents = fs::read("2021-10-30-raspios-bullseye-armhf.zip.torrent")
+    //let file_contents = fs::read("ubuntu-mate-21.10-desktop-amd64.iso.torrent")
+    let file_contents = fs::read("debian-11.2.0-amd64-netinst.iso.torrent")
         .await
         .expect("Couldn't read the torrent file");
     let contents = BeValue::from_bytes(&file_contents).expect("Couldn't parse the torrent file");
     let metainfo = metainfo::Metainfo::from_src_be(&file_contents, contents)
         .expect("Couldn't parse the torrent file");
 
-    tracing::debug!("Parsed torrent metainfo");
+    tracing::debug!("Torrent metainfo: {:?}", metainfo);
 
     let client_id = tracker::gen_client_id();
     let req_url = tracker::build_announce_url(
@@ -59,10 +60,10 @@ async fn main() {
     let (pm, pm_sender, register_recv, notify_recv) =
         PieceManager::new(metainfo.piece_count(), io_sender.clone());
 
-    let mut tasks = Vec::new();
-
-    tasks.push(tokio::spawn(PieceManager::piece_manager(pm)));
-    tasks.push(tokio::spawn(Io::start(io)));
+    let mut tasks = vec![
+        tokio::spawn(PieceManager::piece_manager(pm)),
+        tokio::spawn(Io::start(io)),
+    ];
 
     for socket_addr in response.peers {
         let handshake = Arc::clone(&handshake);
@@ -82,15 +83,14 @@ async fn main() {
             )
             .await
             {
-                tracing::info!("{:?}", e);
+                tracing::debug!("Peer task error: '{:?}'", e);
             }
         }));
     }
 
     for t in tasks {
-        match t.await {
-            Ok(_) => (),
-            Err(e) => tracing::error!("Task falied to complete: '{}'", e),
+        if let Err(e) = t.await {
+            tracing::error!("Task falied to complete: '{}'", e)
         };
     }
 }

@@ -36,7 +36,7 @@ pub enum Message {
 pub struct MessageCodec;
 
 #[derive(Error, Debug)]
-pub enum MessageDecoderErr {
+pub enum MessageDecodeErr {
     #[error("IO error: '{0}'")]
     Io(#[from] std::io::Error),
     #[error("Invalid message with length: '{0}', id: '{1}'")]
@@ -47,7 +47,7 @@ pub enum MessageDecoderErr {
 
 impl Decoder for MessageCodec {
     type Item = Message;
-    type Error = MessageDecoderErr;
+    type Error = MessageDecodeErr;
 
     fn decode(
         &mut self,
@@ -87,7 +87,7 @@ impl Decoder for MessageCodec {
                     1 => Ok(Some(Message::Unchoke)),
                     2 => Ok(Some(Message::Interested)),
                     3 => Ok(Some(Message::NotInterested)),
-                    _ => Err(MessageDecoderErr::InvalidMessage(1, id)),
+                    _ => Err(MessageDecodeErr::InvalidMessage(1, id)),
                 }
             }
             _ => {
@@ -133,8 +133,8 @@ impl Decoder for MessageCodec {
                         Ok(Some(Message::Cancel { index, begin, len }))
                     }
                     // Port
-                    (3, 9) => Err(MessageDecoderErr::PortUnimplemented),
-                    (len, id) => Err(MessageDecoderErr::InvalidMessage(len as u32, id)),
+                    (3, 9) => Err(MessageDecodeErr::PortUnimplemented),
+                    (len, id) => Err(MessageDecodeErr::InvalidMessage(len as u32, id)),
                 }
             }
         }

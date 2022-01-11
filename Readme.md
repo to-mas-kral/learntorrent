@@ -1,9 +1,16 @@
 ![Rust build and tests](https://github.com/TomasKralCZ/learntorrent/actions/workflows/rust.yml/badge.svg)
 
-https://wiki.theory.org/BitTorrentSpecification
+This program implements a simple
 
-https://www.seanjoflynn.com/research/bittorrent.html
-https://markuseliasson.se/article/bittorrent-in-python/
-https://blog.jse.li/posts/torrent/
+# Features
+- [ ] Downloading from both seeds and peers
+- [ ] Multiple file torrents
 
-https://rust-fuzz.github.io/book/cargo-fuzz.html
+# TODO
+- [ ] UDP protocol
+- [ ] DHT
+
+# Sources
+- Unofficial specification: https://wiki.theory.org/BitTorrentSpecification <br/>
+- Guide - https://www.seanjoflynn.com/research/bittorrent.html <br/>
+- Guide: https://blog.jse.li/posts/torrent/ <br/>

@@ -18,8 +18,10 @@ pub struct Metainfo {
     pub total_length: u64,
     /// Filename
     pub name: String,
+    /// SHA1 hashes if the individual pieces
     pub piece_hashes: Vec<u8>,
-    // TODO: MD5sum
+    /// MD5 hash of the whole file
+    pub md5sum: Option<Vec<u8>>,
 }
 
 impl Metainfo {
@@ -37,33 +39,38 @@ impl Metainfo {
             Self::sha1(info_slice)
         };
 
-        let total_length;
+        let piece_hashes = info.expect("pieces")?.get_str()?.clone();
+        if piece_hashes.len() % 20 != 0 {
+            return Err(MiError::InvalidPiecesLen(piece_hashes.len()));
+        }
 
-        // Multiple file mode
-        if let Some(files) = info.get_mut("files") {
+        let file = if let Some(files) = info.get_mut("files") {
             let files = files.get_list()?;
 
             if files.len() > 1 {
                 unimplemented!("Torrents with multiple files are unimplemented");
             }
 
-            total_length = files[0].get_dict()?.expect("length")?.get_uint()?;
+            files[0].get_dict()?
         } else {
-            total_length = info.expect("length")?.get_uint()?;
-        }
+            info
+        };
 
-        let piece_hashes = info.expect("pieces")?.get_str()?.clone();
-        if piece_hashes.len() % 20 != 0 {
-            return Err(MiError::InvalidPiecesLen(piece_hashes.len()));
-        }
+        let total_length = file.expect("length")?.get_uint()?;
+
+        let md5sum = match file.get_mut("md5sum") {
+            Some(md5) => Some(md5.get_str()?.clone()),
+            None => None,
+        };
 
         Ok(Metainfo {
+            announce,
             info_hash,
             piece_length,
             total_length,
             name,
             piece_hashes,
-            announce,
+            md5sum,
         })
     }
 

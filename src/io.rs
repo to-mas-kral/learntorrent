@@ -42,26 +42,7 @@ impl Io {
 
             let piece_msg = self.rx.recv_async().await;
             match piece_msg {
-                Ok(pm) => {
-                    let piece_offset = pm.piece_id * self.metainfo.piece_length;
-                    writer
-                        .seek(SeekFrom::Start(piece_offset as u64))
-                        .await
-                        .expect("Seek to a wrong position");
-
-                    for b in pm.completed_requests {
-                        writer
-                            .write_all_buf(&mut b.bytes.as_ref())
-                            .await
-                            .expect("IO error");
-                    }
-
-                    writer.flush().await.expect("IO error");
-
-                    tracing::debug!("Piece '{}' written to file", pm.piece_id);
-
-                    self.missing_pieces -= 1;
-                }
+                Ok(pm) => self.on_piece_msg(pm, &mut writer).await,
                 Err(_) => {
                     // TODO: this should only happen if there's an internal error in the Piece Manager
                     return;
@@ -69,11 +50,34 @@ impl Io {
             }
         }
     }
+
+    async fn on_piece_msg(&mut self, pm: PieceIoMsg, writer: &mut BufWriter<File>) {
+        let piece_offset = pm.piece_id * self.metainfo.piece_length;
+
+        writer
+            .seek(SeekFrom::Start(piece_offset as u64))
+            .await
+            .expect("Seek to a wrong position");
+
+        for b in pm.completed_requests {
+            writer
+                .write_all_buf(&mut b.bytes.as_ref())
+                .await
+                .expect("IO error");
+        }
+
+        writer.flush().await.expect("IO error");
+
+        tracing::debug!("Piece '{}' written to file", pm.piece_id);
+
+        self.missing_pieces -= 1;
+    }
 }
 
 pub struct PieceIoMsg {
-    piece_id: PieceId,
-    /// It is expected, that the blocks are sorted
+    /// ID of the piece
+    pub piece_id: PieceId,
+    /// The blocks must be sorted by offset !
     completed_requests: Vec<CompletedBlockRequest>,
 }
 

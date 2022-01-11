@@ -22,7 +22,7 @@ use crate::{
     piece_manager::{PieceId, PieceMsg, PmMsg, TaskId, TaskRegInfo, TorrentState},
 };
 
-use self::message::{Message, MessageCodec, MessageDecoderErr, MessageEncodeErr};
+use self::message::{Message, MessageCodec, MessageDecodeErr, MessageEncodeErr};
 
 type MsgStream = Framed<TcpStream, MessageCodec>;
 
@@ -104,10 +104,10 @@ impl PeerTask {
     async fn init(mut self) -> Result<(), PeerErr> {
         let res = self.process().await;
 
-        if let Err(_) = res {
+        if res.is_err() {
             if let Some(pt) = &self.piece_tracker {
                 self.pm_sender
-                    .send_async(PmMsg::PieceRestart(pt.piece_id))
+                    .send_async(PmMsg::PieceFailed(pt.piece_id))
                     .await?;
                 tracing::info!("failure while requesting piece '{}'", pt.piece_id);
             }
@@ -135,13 +135,20 @@ impl PeerTask {
                     val.expect("Shouldn't panic");
 
                     if let TorrentState::Complete = *self.notify_recv.borrow() {
+                        tracing::debug!("Exiting - task '{}' received torrent completion notification", self.id);
                         return Ok(());
                     }
                 }
-                msg = Self::receive_message(&mut msg_stream, 60) => {
-                    let msg = msg?;
-                    self.on_msg_received(msg, first_message).await?;
-                    first_message = false;
+                Ok(msg) = tokio::time::timeout(Duration::from_secs(60), async {
+                    msg_stream.next().await
+                }) => {
+                    match msg {
+                        None => return Err(PeerErr::Terminated),
+                        Some(m) => {
+                            self.on_msg_received(m?, first_message).await?;
+                            first_message = false;
+                        }
+                    }
                 }
             }
         }
@@ -205,7 +212,7 @@ impl PeerTask {
 
         if let Some(pt) = &self.piece_tracker {
             self.pm_sender
-                .send_async(PmMsg::PieceRestart(pt.piece_id))
+                .send_async(PmMsg::PieceFailed(pt.piece_id))
                 .await?;
         }
 
@@ -219,6 +226,8 @@ impl PeerTask {
         begin: u32,
         block: BytesMut,
     ) -> Result<(), PeerErr> {
+        tracing::trace!("Task '{}' received a block", self.id);
+
         if let Some(pt) = &mut self.piece_tracker {
             if index != pt.piece_id {
                 return Err(PeerErr::InvalidPieceReceived);
@@ -237,7 +246,7 @@ impl PeerTask {
         let valid = Self::validate_piece(&mut pt, &self.metainfo);
 
         if valid {
-            tracing::info!("Piece '{}' downloaded", pt.piece_id);
+            tracing::debug!("Piece '{}' finished", pt.piece_id);
 
             let io_msg = PieceIoMsg::new(pt.piece_id, pt.completed_requests);
             self.pm_sender
@@ -247,7 +256,7 @@ impl PeerTask {
             tracing::info!("Piece '{}' bad hash", pt.piece_id);
 
             self.pm_sender
-                .send_async(PmMsg::PieceRestart(pt.piece_id))
+                .send_async(PmMsg::PieceFailed(pt.piece_id))
                 .await?;
         }
 
@@ -320,12 +329,12 @@ impl PeerTask {
 
     async fn setup_connection(&mut self) -> Result<MsgStream, PeerErr> {
         let mut stream = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_secs(30),
             TcpStream::connect(self.socket_addr),
         )
         .await??;
 
-        tracing::trace!(
+        tracing::debug!(
             "Successfull connection: '{:?}'. Sending a handshake.",
             self.socket_addr
         );
@@ -333,7 +342,7 @@ impl PeerTask {
         stream.write_all(&self.handshake.inner).await?;
 
         let mut peer_handshake = Handshake::new_empty();
-        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
             stream.read_exact(&mut peer_handshake.inner).await
         })
         .await??;
@@ -341,23 +350,9 @@ impl PeerTask {
         let _peer_id = peer_handshake.validate(&peer_handshake)?;
         let msg_stream = MsgStream::new(stream, MessageCodec);
 
-        tracing::info!("Handshake with '{:?}' complete", self.socket_addr);
+        tracing::debug!("Handshake with '{:?}' complete", self.socket_addr);
 
         Ok(msg_stream)
-    }
-
-    async fn receive_message(msg_stream: &mut MsgStream, timeout: u64) -> Result<Message, PeerErr> {
-        let res = tokio::time::timeout(Duration::from_secs(timeout), async {
-            loop {
-                let res = msg_stream.next().await;
-                if let Some(inner) = res {
-                    break inner;
-                }
-            }
-        })
-        .await;
-
-        Ok(res??)
     }
 }
 
@@ -368,6 +363,8 @@ pub enum PeerErr {
 
     #[error("Timeout")]
     Timeout(#[from] Elapsed),
+    #[error("The session was terminated by the peer")]
+    Terminated,
     #[error("Received an invalid handshake")]
     InvalidHandshake,
     #[error("Received a block related to an invalid piece")]
@@ -378,7 +375,7 @@ pub enum PeerErr {
     BitfieldNotFirst,
 
     #[error("Message decoding error: '{0}'")]
-    InvalidMessage(#[from] MessageDecoderErr),
+    InvalidMessage(#[from] MessageDecodeErr),
     #[error("Message encoding error: '{0}'")]
     MessageEncodeErr(#[from] MessageEncodeErr),
 
