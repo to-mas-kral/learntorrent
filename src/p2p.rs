@@ -1,28 +1,29 @@
-mod message;
-
 use std::{net::SocketAddrV4, sync::Arc, time::Duration};
 
 use bytes::BytesMut;
 use flume::{Receiver, Sender};
 use futures::sink::SinkExt;
 use futures_util::StreamExt;
-use sha1::{Digest, Sha1};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::watch::Receiver as WReceiver,
-    time::error::Elapsed,
 };
 use tokio_util::codec::Framed;
 
 use crate::{
-    io::PieceIoMsg,
     metainfo::Metainfo,
-    piece_manager::{PieceId, PieceMsg, PmMsg, TaskId, TaskRegInfo, TorrentState},
+    p2p::piece_tracker::{CompletedBlockRequest, PieceTracker},
+    piece_manager::{PieceMsg, PmMsg, TaskId, TaskRegInfo, TorrentState},
 };
 
 use self::message::{Message, MessageCodec, MessageDecodeErr, MessageEncodeErr};
+
+mod message;
+mod piece_tracker;
+
+pub use piece_tracker::ValidatedPiece;
 
 type MsgStream = Framed<TcpStream, MessageCodec>;
 
@@ -43,7 +44,9 @@ pub struct PeerTask {
     /// Torrent metainfo
     metainfo: Arc<Metainfo>,
 
+    // Is this task choked by the peer ?
     am_choked: bool,
+    // Has this task already expressed interest in receiving pieces ?
     am_interested: bool,
 
     /// Holds information about the progress of the currently downloaded piece
@@ -82,11 +85,8 @@ impl PeerTask {
         reg_recv: Receiver<TaskRegInfo>,
         notify_recv: WReceiver<TorrentState>,
     ) -> Result<(), PeerErr> {
-        pm_sender
-            .send_async(PmMsg::Register)
-            .await
-            .expect("Shouldn't panic ?");
-        let task_reg_info = reg_recv.recv_async().await.expect("Shouldn't panic ?");
+        pm_sender.send_async(PmMsg::Register).await?;
+        let task_reg_info = reg_recv.recv_async().await?;
 
         let peer_task = PeerTask::new(
             task_reg_info.id,
@@ -107,21 +107,23 @@ impl PeerTask {
         if res.is_err() {
             if let Some(pt) = &self.piece_tracker {
                 self.pm_sender
-                    .send_async(PmMsg::PieceFailed(pt.piece_id))
+                    .send_async(PmMsg::PieceFailed(pt.pid))
                     .await?;
-                tracing::info!("failure while requesting piece '{}'", pt.piece_id);
+                tracing::info!("failure while requesting piece '{}'", pt.pid);
             }
         }
 
         self.pm_sender
             .send_async(PmMsg::Deregister(self.id))
-            .await
-            .expect("Shouldn't panic ?");
+            .await?;
 
         res
     }
 
+    /// The main peer session loop
     async fn process(&mut self) -> Result<(), PeerErr> {
+        const TIMEOUT: u64 = 30;
+
         let mut msg_stream = self.setup_connection().await?;
 
         let mut first_message = true;
@@ -130,25 +132,20 @@ impl PeerTask {
             self.queue_requests(&mut msg_stream).await?;
             self.send_interested(&mut msg_stream).await?;
 
+            // Abort if we haven't received a message in <TIMEOUT> seconds
             tokio::select! {
-                val = self.notify_recv.changed() => {
-                    val.expect("Shouldn't panic");
-
+                Ok(_) = self.notify_recv.changed() => {
                     if let TorrentState::Complete = *self.notify_recv.borrow() {
                         tracing::debug!("Exiting - task '{}' received torrent completion notification", self.id);
                         return Ok(());
                     }
                 }
-                Ok(msg) = tokio::time::timeout(Duration::from_secs(60), async {
+                Ok(msg) = tokio::time::timeout(Duration::from_secs(TIMEOUT), async {
                     msg_stream.next().await
                 }) => {
-                    match msg {
-                        None => return Err(PeerErr::Terminated),
-                        Some(m) => {
-                            self.on_msg_received(m?, first_message).await?;
-                            first_message = false;
-                        }
-                    }
+                    let m = msg.ok_or(PeerErr::Terminated)??;
+                    self.on_msg_received(m, first_message).await?;
+                    first_message = false;
                 }
             }
         }
@@ -157,27 +154,27 @@ impl PeerTask {
     async fn on_msg_received(&mut self, msg: Message, first_message: bool) -> Result<(), PeerErr> {
         match msg {
             Message::KeepAlive => tracing::debug!("Peer '{}' keep-alive", self.id),
-            Message::Choke => self.on_choke().await?,
-            Message::Unchoke => self.on_unchoke(),
-            Message::Have(piece_id) => self.on_have(piece_id).await?,
-            Message::Bitfield(bitfield) => self.on_bitfield(first_message, bitfield).await?,
+            Message::Choke => self.on_choke_msg().await?,
+            Message::Unchoke => self.on_unchoke_msg(),
+            Message::Have(piece_id) => self.on_have_msg(piece_id).await?,
+            Message::Bitfield(bitfield) => self.on_bitfield_msg(first_message, bitfield).await?,
             Message::Piece {
                 index,
                 begin,
                 block,
-            } => self.on_block_receive(index, begin, block).await?,
+            } => self.on_block_receive_msg(index, begin, block).await?,
             m => tracing::warn!("Unimplmeneted message received: {:?}", m),
         }
 
         Ok(())
     }
 
-    fn on_unchoke(&mut self) {
+    fn on_unchoke_msg(&mut self) {
         tracing::debug!("Peer '{}' unchoked", self.id);
         self.am_choked = false;
     }
 
-    async fn on_bitfield(
+    async fn on_bitfield_msg(
         &mut self,
         first_message: bool,
         bitfield: BytesMut,
@@ -195,7 +192,7 @@ impl PeerTask {
         Ok(())
     }
 
-    async fn on_have(&mut self, piece_id: u32) -> Result<(), PeerErr> {
+    async fn on_have_msg(&mut self, piece_id: u32) -> Result<(), PeerErr> {
         tracing::debug!("Peer '{}' has new piece '{}'", self.id, piece_id);
 
         self.pm_sender
@@ -205,14 +202,14 @@ impl PeerTask {
         Ok(())
     }
 
-    async fn on_choke(&mut self) -> Result<(), PeerErr> {
+    async fn on_choke_msg(&mut self) -> Result<(), PeerErr> {
         tracing::debug!("Peer '{}' choked", self.id);
 
         self.am_choked = true;
 
         if let Some(pt) = &self.piece_tracker {
             self.pm_sender
-                .send_async(PmMsg::PieceFailed(pt.piece_id))
+                .send_async(PmMsg::PieceFailed(pt.pid))
                 .await?;
         }
 
@@ -220,7 +217,7 @@ impl PeerTask {
         Ok(())
     }
 
-    async fn on_block_receive(
+    async fn on_block_receive_msg(
         &mut self,
         index: u32,
         begin: u32,
@@ -229,7 +226,7 @@ impl PeerTask {
         tracing::trace!("Task '{}' received a block", self.id);
 
         if let Some(pt) = &mut self.piece_tracker {
-            if index != pt.piece_id {
+            if index != pt.pid {
                 return Err(PeerErr::InvalidPieceReceived);
             }
 
@@ -242,49 +239,29 @@ impl PeerTask {
         }
 
         // Only if whole piece is downloaded
-        let mut pt = std::mem::take(&mut self.piece_tracker).unwrap();
-        let valid = Self::validate_piece(&mut pt, &self.metainfo);
+        // UNWRAP: safe because we checked in self.piece tracker is Some
+        let pt = std::mem::take(&mut self.piece_tracker).unwrap();
+        let pid = pt.pid;
+        let valid = pt.validate_piece(&self.metainfo)?;
 
-        if valid {
-            tracing::debug!("Piece '{}' finished", pt.piece_id);
+        if let Some(vp) = valid {
+            tracing::debug!("Piece '{}' finished", pid);
 
-            let io_msg = PieceIoMsg::new(pt.piece_id, pt.completed_requests);
-            self.pm_sender
-                .send_async(PmMsg::PieceFinished(io_msg))
-                .await?;
+            self.pm_sender.send_async(PmMsg::PieceFinished(vp)).await?;
         } else {
-            tracing::info!("Piece '{}' bad hash", pt.piece_id);
+            tracing::info!("Piece '{}' bad hash", pid);
 
-            self.pm_sender
-                .send_async(PmMsg::PieceFailed(pt.piece_id))
-                .await?;
+            self.pm_sender.send_async(PmMsg::PieceFailed(pid)).await?;
         }
 
         Ok(())
-    }
-
-    fn validate_piece(pt: &mut PieceTracker, metainfo: &Metainfo) -> bool {
-        let piece_hash = {
-            pt.completed_requests
-                .sort_by(|a, b| a.offset.cmp(&b.offset));
-
-            let mut hasher = Sha1::new();
-            for b in &pt.completed_requests {
-                hasher.update(&b.bytes);
-            }
-
-            hasher.finalize()
-        };
-
-        let expected_hash = metainfo.get_hash(pt.piece_id).expect("Shouldn't happen");
-        expected_hash == piece_hash.as_slice()
     }
 
     /// If we are currently downloading a piece, ask the peer for some new
     /// blocks if needed
     async fn queue_requests(&mut self, msg_stream: &mut MsgStream) -> Result<(), PeerErr> {
         if let Some(pt) = &mut self.piece_tracker {
-            let piece_id = pt.piece_id;
+            let piece_id = pt.pid;
             for r in pt.next_requests() {
                 msg_stream
                     .send(Message::Request {
@@ -327,12 +304,14 @@ impl PeerTask {
         Ok(())
     }
 
+    /// Set up a TCP connection, exchange and validate handshakes
     async fn setup_connection(&mut self) -> Result<MsgStream, PeerErr> {
         let mut stream = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             TcpStream::connect(self.socket_addr),
         )
-        .await??;
+        .await
+        .map_err(|_| PeerErr::Timeout)??;
 
         tracing::debug!(
             "Successfull connection: '{:?}'. Sending a handshake.",
@@ -345,7 +324,8 @@ impl PeerTask {
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             stream.read_exact(&mut peer_handshake.inner).await
         })
-        .await??;
+        .await
+        .map_err(|_| PeerErr::Timeout)??;
 
         let _peer_id = peer_handshake.validate(&peer_handshake)?;
         let msg_stream = MsgStream::new(stream, MessageCodec);
@@ -358,144 +338,34 @@ impl PeerTask {
 
 #[derive(Error, Debug)]
 pub enum PeerErr {
-    #[error("TCP error: '{0}'")]
+    #[error("TCP IO error: '{0}'")]
     FailedConnection(#[from] tokio::io::Error),
+    #[error("Peer timed out")]
+    Timeout,
 
-    #[error("Timeout")]
-    Timeout(#[from] Elapsed),
     #[error("The session was terminated by the peer")]
     Terminated,
     #[error("Received an invalid handshake")]
     InvalidHandshake,
-    #[error("Received a block related to an invalid piece")]
+    #[error("Received a block related to a different piece")]
     InvalidPieceReceived,
     #[error("Received a block of invalid size")]
     InvalidBlockSize,
     #[error("'Bitfield' message wasn't the first message")]
     BitfieldNotFirst,
 
+    #[error("Received an invalid piece ID from the PieceManager")]
+    InvalidPiecePick,
+
     #[error("Message decoding error: '{0}'")]
     InvalidMessage(#[from] MessageDecodeErr),
     #[error("Message encoding error: '{0}'")]
     MessageEncodeErr(#[from] MessageEncodeErr),
 
-    #[error("Flume error")]
-    FlumeErr(#[from] flume::SendError<PmMsg>),
-    #[error("Flume error")]
-    FlumeErr2(#[from] flume::RecvError),
-    #[error("Flume error")]
-    FlumeErr3(#[from] flume::SendError<PieceIoMsg>),
-}
-
-/// Tracks download progress of the current piece
-struct PieceTracker {
-    piece_id: PieceId,
-    piece_size: u32,
-    /// Marks the amount of bytes that have been downloaded already
-    offset: u32,
-    pending_requests: Vec<PendingBlockRequest>,
-    completed_requests: Vec<CompletedBlockRequest>,
-    /// Piece size - length of already downloaded blocks
-    remaining_bytes: u32,
-}
-
-impl PieceTracker {
-    const BLOCK_LEN: u32 = 16384;
-    const MAX_PENDING_REQUESTS: usize = 5;
-
-    fn new(piece_id: PieceId, piece_size: u32) -> Self {
-        let pending_requests = Vec::with_capacity(Self::MAX_PENDING_REQUESTS);
-        let completed_requests = Vec::with_capacity(32);
-
-        Self {
-            piece_id,
-            piece_size,
-            offset: 0,
-            pending_requests,
-            completed_requests,
-            remaining_bytes: piece_size,
-        }
-    }
-
-    fn next_pending_request(&mut self) -> Option<PendingBlockRequest> {
-        let old_offset = self.offset;
-        let remaining = self.piece_size - self.offset;
-
-        if remaining > Self::BLOCK_LEN {
-            self.offset += Self::BLOCK_LEN;
-            return Some(PendingBlockRequest::new(old_offset, Self::BLOCK_LEN));
-        }
-
-        // Last block
-        if remaining > 0 {
-            self.offset += remaining;
-            Some(PendingBlockRequest::new(old_offset, remaining))
-        } else {
-            None
-        }
-    }
-
-    fn next_requests(&mut self) -> &[PendingBlockRequest] {
-        let current_requests = self.pending_requests.len();
-        let new_requests = Self::MAX_PENDING_REQUESTS - current_requests;
-        if new_requests > 0 {
-            for _ in 0..new_requests {
-                if let Some(pr) = self.next_pending_request() {
-                    self.pending_requests.push(pr)
-                } else {
-                    return &[];
-                }
-            }
-
-            &self.pending_requests[current_requests..]
-        } else {
-            &[]
-        }
-    }
-
-    /// Returns true if all blocks have been downloaded
-    fn request_completed(&mut self, req: CompletedBlockRequest) -> Result<bool, PeerErr> {
-        let index = self
-            .pending_requests
-            .iter()
-            .position(|pr| pr.offset == req.offset && pr.size == req.size)
-            .ok_or(PeerErr::InvalidBlockSize)?;
-        self.pending_requests.remove(index);
-
-        self.remaining_bytes -= req.size;
-        self.completed_requests.push(req);
-
-        Ok(self.remaining_bytes == 0)
-    }
-}
-
-#[derive(Debug)]
-struct PendingBlockRequest {
-    offset: u32,
-    size: u32,
-}
-
-impl PendingBlockRequest {
-    fn new(offset: u32, len: u32) -> Self {
-        Self { offset, size: len }
-    }
-}
-
-#[derive(Debug)]
-pub struct CompletedBlockRequest {
-    pub offset: u32,
-    size: u32,
-    pub bytes: BytesMut,
-}
-
-impl CompletedBlockRequest {
-    fn new(offset: u32, len: u32, data: BytesMut) -> Self {
-        Self {
-            offset,
-            size: len,
-            bytes: data,
-        }
-    }
+    #[error("Channel error while sending messages to Piece Manager")]
+    ChannelPmErr(#[from] flume::SendError<PmMsg>),
+    #[error("Channel error while receiving messages from Piece Manager")]
+    ChannelRecvErr(#[from] flume::RecvError),
 }
 
 pub struct Handshake {

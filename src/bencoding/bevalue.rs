@@ -1,7 +1,4 @@
-use std::fmt;
-use std::num::TryFromIntError;
-use std::string::FromUtf8Error;
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, fmt, num::TryFromIntError, ops::Range, string::FromUtf8Error};
 
 use thiserror::Error;
 

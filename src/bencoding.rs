@@ -47,7 +47,7 @@ impl<'s> BeParser<'s> {
 
         let num = i64::try_from(self.parse_digits()?)?;
 
-        self.expect(b'e', "Expected end of integer")?;
+        self.expect(b'e')?;
 
         Ok(minus_one * num)
     }
@@ -55,7 +55,7 @@ impl<'s> BeParser<'s> {
     fn parse_str(&mut self) -> Result<Vec<u8>, BeDecodeError> {
         let len = self.parse_digits()?;
 
-        self.expect(b':', "Expected a colon while parsing a string")?;
+        self.expect(b':')?;
 
         // TODO: have some allocation limits
         let mut string = Vec::with_capacity(len as usize);
@@ -71,12 +71,12 @@ impl<'s> BeParser<'s> {
 
     fn parse_digits(&mut self) -> Result<u64, BeDecodeError> {
         let digits = self.take_while(|b| b.is_ascii_digit())?;
-        // This shouldn't panic since we are only accepting ASCII digits...
+        // UNWRAP: safe becasue we are only accepting ASCII digits
         let digits = std::str::from_utf8(digits).unwrap();
 
-        let num = digits.parse::<u64>().map_err(|_| {
-            BeDecodeError::InvalidStrLen(digits.to_string(), "not a proper string length")
-        })?;
+        let num = digits
+            .parse::<u64>()
+            .map_err(|_| BeDecodeError::InvalidStrLen(digits.to_string()))?;
 
         Ok(num)
     }
@@ -145,10 +145,10 @@ impl<'s> BeParser<'s> {
         }
     }
 
-    fn expect(&mut self, expected: u8, error_msg: &'static str) -> Result<(), BeDecodeError> {
+    fn expect(&mut self, expected: u8) -> Result<(), BeDecodeError> {
         match self.next() {
             Some(c) if *c == expected => Ok(()),
-            o => Err(BeDecodeError::Expected(error_msg, o.cloned())),
+            o => Err(BeDecodeError::Unexpected(o.cloned())),
         }
     }
 
@@ -169,12 +169,12 @@ pub enum BeDecodeError {
     UnexpectedEnd,
     #[error("Initial element character should be either a digit, 'i', 'l' or 'd', got: {0}")]
     InvalidInitialByte(u8),
-    #[error("Found an invalid integer: {0}, cause: '{0}'")]
-    InvalidStrLen(String, &'static str),
-    #[error("Invalid number")]
+    #[error("The integer: {0}, is not a valid string length")]
+    InvalidStrLen(String),
+    #[error("Invalid number: '{0}")]
     InvalidNum(#[from] std::num::TryFromIntError),
-    #[error("{0}, got: {1:?}")]
-    Expected(&'static str, Option<u8>),
+    #[error("Unexpected byte: {0:?}")]
+    Unexpected(Option<u8>),
     #[error("Dictionary key must be a valid UTF-8 string. {0}")]
     InvalidDictKey(#[from] std::string::FromUtf8Error),
 }
@@ -234,6 +234,4 @@ mod test {
         BeParser::parse_with("5.5:10".as_bytes()).expect_err("");
         BeParser::parse_with("2ae".as_bytes()).expect_err("");
     }
-
-    // TODO: more tests
 }

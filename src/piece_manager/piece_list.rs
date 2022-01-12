@@ -1,7 +1,9 @@
 use super::{bitfield::BitField, PieceId};
 
-/// Simple mechanism for sequential order piece picking
-#[derive(Debug)]
+/// Simple mechanism for piece book-keeping.
+/// Pieces are stored using ranges of integers.
+/// A Piece list containing pieces 3, 4, 5, 9, 10, 11 is stored in blocks like this:
+/// [(3, 5), (9, 11)].
 pub struct PieceList {
     /// Blocks are inclusive ranges (PieceId..=PieceId)
     blocks: Vec<(PieceId, PieceId)>,
@@ -60,6 +62,7 @@ impl PieceList {
         }
     }
 
+    /// Inserts a piece od index 'pid' into the list
     pub fn insert(&mut self, pid: PieceId) {
         let len = self.blocks.len();
 
@@ -83,7 +86,9 @@ impl PieceList {
         }
     }
 
-    // i is the index of the newly-isnerted block
+    /// Joins contiguous blocks together, for example:
+    /// (1, 5), (6, 8), (9, 11) -> (1, 11)
+    /// i is the index of the newly-isnerted block
     fn compact(&mut self, i: usize) {
         let len = self.blocks.len();
 

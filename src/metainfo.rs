@@ -40,9 +40,6 @@ impl Metainfo {
         };
 
         let piece_hashes = info.expect("pieces")?.get_str()?.clone();
-        if piece_hashes.len() % 20 != 0 {
-            return Err(MiError::InvalidPiecesLen(piece_hashes.len()));
-        }
 
         let file = if let Some(files) = info.get_mut("files") {
             let files = files.get_list()?;
@@ -63,7 +60,7 @@ impl Metainfo {
             None => None,
         };
 
-        Ok(Metainfo {
+        let mi = Metainfo {
             announce,
             info_hash,
             piece_length,
@@ -71,7 +68,16 @@ impl Metainfo {
             name,
             piece_hashes,
             md5sum,
-        })
+        };
+
+        // Validate the length of the hashes string
+
+        let len = mi.piece_hashes.len();
+        if len % 20 != 0 || len / 20 != mi.piece_count() as usize {
+            return Err(MiError::InvalidHashesLen(len));
+        }
+
+        Ok(mi)
     }
 
     /// Returns the hash of a specified piece
@@ -108,6 +114,6 @@ type MiResult<T> = Result<T, MiError>;
 pub enum MiError {
     #[error("{0}")]
     BeError(#[from] ResponseParseError),
-    #[error("Pieces length '{0}' should be a multiple of 20")]
-    InvalidPiecesLen(usize),
+    #[error("Hashes length '{0}' should be a multiple of 20")]
+    InvalidHashesLen(usize),
 }

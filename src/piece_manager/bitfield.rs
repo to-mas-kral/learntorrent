@@ -1,6 +1,6 @@
-use super::PieceId;
-
 use bytes::BytesMut;
+
+use super::PieceId;
 
 pub struct BitField {
     inner: BytesMut,
