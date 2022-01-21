@@ -3,6 +3,9 @@
 This program implements a simple BitTorrent client using Tokio. The client communicates with other clients
 using TCP. Currently only leeching is implemented. The pieces are picked sequentially and an [endgame](https://wiki.theory.org/BitTorrentSpecification#End_Game) mode is implemented.
 
+# Architecture
+![Architecture](resources/diagram.jpg)
+
 # TODO
 - [ ] (dev) error handling
 - [ ] Periodically contacting the tracker and maintaining a good amount of connections
