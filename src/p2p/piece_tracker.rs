@@ -20,13 +20,13 @@ pub struct PieceTracker {
     pub remaining_bytes: u32,
 }
 
-impl PieceTracker {
-    pub const BLOCK_LEN: u32 = 16384;
-    pub const MAX_PENDING_REQUESTS: usize = 5;
+pub const BLOCK_LEN: u32 = 16384;
+const MAX_PENDING_REQUESTS: usize = 5;
 
+impl PieceTracker {
     pub fn new(piece_id: PieceId, piece_size: u32) -> Self {
-        let pending_requests = Vec::with_capacity(Self::MAX_PENDING_REQUESTS);
-        let completed_requests = Vec::with_capacity((piece_size / Self::BLOCK_LEN) as usize);
+        let pending_requests = Vec::with_capacity(MAX_PENDING_REQUESTS);
+        let completed_requests = Vec::with_capacity((piece_size / BLOCK_LEN) as usize);
 
         Self {
             pid: piece_id,
@@ -43,9 +43,9 @@ impl PieceTracker {
         let old_offset = self.offset;
         let remaining = self.piece_size - self.offset;
 
-        if remaining > Self::BLOCK_LEN {
-            self.offset += Self::BLOCK_LEN;
-            return Some(PendingBlockRequest::new(old_offset, Self::BLOCK_LEN));
+        if remaining > BLOCK_LEN {
+            self.offset += BLOCK_LEN;
+            return Some(PendingBlockRequest::new(old_offset, BLOCK_LEN));
         }
 
         // Last block
@@ -61,7 +61,7 @@ impl PieceTracker {
     /// Queues new requests
     pub fn next_requests(&mut self) -> &[PendingBlockRequest] {
         let current_requests = self.pending_requests.len();
-        let new_requests = Self::MAX_PENDING_REQUESTS - current_requests;
+        let new_requests = MAX_PENDING_REQUESTS - current_requests;
 
         if new_requests > 0 {
             for _ in 0..new_requests {

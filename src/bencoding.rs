@@ -18,24 +18,24 @@ impl<'s> BeParser<'s> {
         Self { src, pos: 0 }
     }
 
-    pub fn parse_with(src: &'s [u8]) -> Result<BeValue, BeDecodeError> {
+    pub fn parse_with(src: &'s [u8]) -> Result<BeValue, BeDecodeErr> {
         let mut parser = Self::new(src);
         parser.parse_value()
     }
 
-    pub fn parse_value(&mut self) -> Result<BeValue, BeDecodeError> {
+    pub fn parse_value(&mut self) -> Result<BeValue, BeDecodeErr> {
         match self.peek() {
             Some(b'i') => Ok(BeValue::Int(self.parse_int()?)),
             Some(b'l') => Ok(BeValue::List(self.parse_list()?)),
             Some(b'd') => Ok(BeValue::Dict(self.parse_dict()?)),
             Some(c) if c.is_ascii_digit() => Ok(BeValue::Str(self.parse_str()?)),
-            Some(i) => Err(BeDecodeError::InvalidInitialByte(*i)),
-            None => Err(BeDecodeError::UnexpectedEnd),
+            Some(i) => Err(BeDecodeErr::InvalidInitialByte(*i)),
+            None => Err(BeDecodeErr::UnexpectedEnd),
         }
     }
 
     /// i<integer encoded in base ten ASCII>e
-    fn parse_int(&mut self) -> Result<i64, BeDecodeError> {
+    fn parse_int(&mut self) -> Result<i64, BeDecodeErr> {
         self.next().unwrap(); // Skip the "i"
 
         let minus_one = if self.peek() == Some(&b'-') {
@@ -52,7 +52,7 @@ impl<'s> BeParser<'s> {
         Ok(minus_one * num)
     }
 
-    fn parse_str(&mut self) -> Result<Vec<u8>, BeDecodeError> {
+    fn parse_str(&mut self) -> Result<Vec<u8>, BeDecodeErr> {
         let len = self.parse_digits()?;
 
         self.expect(b':')?;
@@ -62,26 +62,26 @@ impl<'s> BeParser<'s> {
         for _ in 0..len {
             match self.next() {
                 Some(b) => string.push(*b),
-                None => return Err(BeDecodeError::UnexpectedEnd),
+                None => return Err(BeDecodeErr::UnexpectedEnd),
             }
         }
 
         Ok(string)
     }
 
-    fn parse_digits(&mut self) -> Result<u64, BeDecodeError> {
+    fn parse_digits(&mut self) -> Result<u64, BeDecodeErr> {
         let digits = self.take_while(|b| b.is_ascii_digit())?;
         // UNWRAP: safe becasue we are only accepting ASCII digits
         let digits = std::str::from_utf8(digits).unwrap();
 
         let num = digits
             .parse::<u64>()
-            .map_err(|_| BeDecodeError::InvalidStrLen(digits.to_string()))?;
+            .map_err(|_| BeDecodeErr::InvalidStrLen(digits.to_string()))?;
 
         Ok(num)
     }
 
-    fn parse_list(&mut self) -> Result<Vec<BeValue>, BeDecodeError> {
+    fn parse_list(&mut self) -> Result<Vec<BeValue>, BeDecodeErr> {
         self.next().unwrap(); // Skip the "l"
 
         let mut list = Vec::new();
@@ -95,7 +95,7 @@ impl<'s> BeParser<'s> {
                     }
                     _ => list.push(self.parse_value()?),
                 },
-                None => return Err(BeDecodeError::UnexpectedEnd),
+                None => return Err(BeDecodeErr::UnexpectedEnd),
             }
         }
 
@@ -103,7 +103,7 @@ impl<'s> BeParser<'s> {
     }
 
     /// d<bencoded string><bencoded element>e
-    fn parse_dict(&mut self) -> Result<Dict, BeDecodeError> {
+    fn parse_dict(&mut self) -> Result<Dict, BeDecodeErr> {
         let start = self.pos;
         self.next().unwrap(); // Skip the "d"
 
@@ -125,7 +125,7 @@ impl<'s> BeParser<'s> {
                         dict.insert(key, val);
                     }
                 },
-                None => return Err(BeDecodeError::UnexpectedEnd),
+                None => return Err(BeDecodeErr::UnexpectedEnd),
             }
         }
 
@@ -133,22 +133,22 @@ impl<'s> BeParser<'s> {
         Ok(Dict::new(dict, start..end))
     }
 
-    fn take_while(&mut self, condition: fn(u8) -> bool) -> Result<&[u8], BeDecodeError> {
+    fn take_while(&mut self, condition: fn(u8) -> bool) -> Result<&[u8], BeDecodeErr> {
         let start = self.pos;
 
         loop {
             match self.peek() {
                 Some(b) if condition(*b) => self.pos += 1,
                 Some(_) => return Ok(&self.src[start..self.pos]),
-                None => return Err(BeDecodeError::UnexpectedEnd),
+                None => return Err(BeDecodeErr::UnexpectedEnd),
             }
         }
     }
 
-    fn expect(&mut self, expected: u8) -> Result<(), BeDecodeError> {
+    fn expect(&mut self, expected: u8) -> Result<(), BeDecodeErr> {
         match self.next() {
             Some(c) if *c == expected => Ok(()),
-            o => Err(BeDecodeError::Unexpected(o.cloned())),
+            o => Err(BeDecodeErr::Unexpected(o.cloned())),
         }
     }
 
@@ -164,7 +164,7 @@ impl<'s> BeParser<'s> {
 }
 
 #[derive(Error, Debug)]
-pub enum BeDecodeError {
+pub enum BeDecodeErr {
     #[error("The byte stream ended unexpectedly")]
     UnexpectedEnd,
     #[error("Initial element character should be either a digit, 'i', 'l' or 'd', got: {0}")]

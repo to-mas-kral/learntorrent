@@ -2,25 +2,25 @@ use std::{collections::HashMap, fmt, num::TryFromIntError, ops::Range, string::F
 
 use thiserror::Error;
 
-use super::{BeDecodeError, BeParser};
+use super::{BeDecodeErr, BeParser};
 
 #[derive(PartialEq)]
 pub enum BeValue {
-    Str(Str),
-    Int(Int),
+    Str(BeStr),
+    Int(BeInt),
     Dict(Dict),
-    List(List),
+    List(BeList),
 }
 
 // String needlessly allocates, but this is not performance-critical code
-pub type Str = Vec<u8>;
-pub type Int = i64;
-pub type List = Vec<BeValue>;
+pub type BeStr = Vec<u8>;
+pub type BeInt = i64;
+pub type BeList = Vec<BeValue>;
 
 #[derive(PartialEq, Default)]
 pub struct Dict {
     vals: HashMap<String, BeValue>,
-    /// For getting the binary data from the source. Used for computing the hash.
+    /// Used for computing the hash of a specific dict.
     pub src_range: Range<usize>,
 }
 
@@ -29,19 +29,31 @@ impl Dict {
         Dict { vals, src_range }
     }
 
-    pub fn expect(&mut self, k: &str) -> Result<&mut BeValue, ResponseParseError> {
+    /// Return a reference to a compulsory field
+    pub fn expect(&mut self, k: &str) -> ReponseParseResult<&mut BeValue> {
         self.vals
             .get_mut(k)
             .ok_or_else(|| ResponseParseError::ValNotContained(k.to_string()))
     }
 
+    /// Get a mutable reference to an optional field
     pub fn get_mut(&mut self, k: &str) -> Option<&mut BeValue> {
         self.vals.get_mut(k)
+    }
+
+    /// Extracts an optional field into a specific type
+    pub fn try_get<T, F>(&mut self, k: &str, f: F) -> ReponseParseResult<Option<T>>
+    where
+        F: FnOnce(&mut BeValue) -> ReponseParseResult<T>,
+    {
+        let res = self.vals.get_mut(k).map(f);
+
+        res.transpose()
     }
 }
 
 impl BeValue {
-    pub fn from_bytes(src: &[u8]) -> Result<Self, BeDecodeError> {
+    pub fn from_bytes(src: &[u8]) -> Result<Self, BeDecodeErr> {
         BeParser::parse_with(src)
     }
 
@@ -52,16 +64,16 @@ impl BeValue {
         }
     }
 
-    pub fn get_list(&mut self) -> ReponseParseResult<&mut List> {
+    pub fn get_list(&mut self) -> ReponseParseResult<&mut BeList> {
         match self {
             BeValue::List(l) => Ok(l),
             t => Err(ResponseParseError::InvalidType("dictionary", t.label())),
         }
     }
 
-    pub fn get_str(&mut self) -> ReponseParseResult<&mut Str> {
+    pub fn get_str(&mut self) -> ReponseParseResult<BeStr> {
         match self {
-            BeValue::Str(s) => Ok(s),
+            BeValue::Str(s) => Ok(s.clone()),
             t => Err(ResponseParseError::InvalidType("string", t.label())),
         }
     }
@@ -77,47 +89,6 @@ impl BeValue {
         match self {
             BeValue::Int(i) => Ok(u64::try_from(*i)?),
             t => Err(ResponseParseError::InvalidType("integer", t.label())),
-        }
-    }
-
-    const INDENT_LEN: usize = 4;
-
-    // TODO: better bevalue formatting code
-    pub fn inner_fmt(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
-        match self {
-            BeValue::Str(s) => {
-                let lossy_string = String::from_utf8_lossy(s);
-                f.write_fmt(format_args!("{}\n", lossy_string))
-            }
-            BeValue::Int(i) => f.write_fmt(format_args!("{}\n", i)),
-            BeValue::Dict(d) => {
-                f.write_fmt(format_args!("Dict\n"))?;
-                for (key, val) in d.vals.iter() {
-                    f.write_str(&" ".repeat((depth - 1) * Self::INDENT_LEN))?;
-                    f.write_str("|")?;
-                    f.write_str(&" ".repeat(Self::INDENT_LEN - 1))?;
-
-                    f.write_fmt(format_args!("{}: ", key))?;
-                    if key == "pieces" {
-                        f.write_str("<piece hashes...>\n")?;
-                    } else {
-                        val.inner_fmt(f, depth + 1)?;
-                    }
-                }
-
-                Ok(())
-            }
-            BeValue::List(l) => {
-                f.write_fmt(format_args!("List\n"))?;
-                for val in l.iter() {
-                    f.write_str(&" ".repeat((depth - 1) * Self::INDENT_LEN))?;
-                    f.write_str("|")?;
-                    f.write_str(&" ".repeat(Self::INDENT_LEN - 1))?;
-                    val.inner_fmt(f, depth + 1)?;
-                }
-
-                Ok(())
-            }
         }
     }
 
@@ -147,6 +118,21 @@ pub enum ResponseParseError {
 
 impl fmt::Debug for BeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner_fmt(f, 1)
+        match self {
+            BeValue::Str(s) => {
+                let lossy_string = String::from_utf8_lossy(s);
+                f.write_fmt(format_args!("{}", lossy_string))
+            }
+            BeValue::Int(i) => f.write_fmt(format_args!("{}", i)),
+            BeValue::Dict(d) => f
+                .debug_map()
+                .entries(
+                    d.vals
+                        .iter()
+                        .filter(|(k, _)| *k != "pieces" && *k != "piece_hashes"),
+                )
+                .finish(),
+            BeValue::List(l) => f.debug_list().entries(l.iter()).finish(),
+        }
     }
 }

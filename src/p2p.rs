@@ -8,14 +8,14 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::watch::Receiver as WReceiver,
+    sync::{oneshot, watch::Receiver as WReceiver},
 };
 use tokio_util::codec::Framed;
 
 use crate::{
     metainfo::Metainfo,
     p2p::piece_tracker::{CompletedBlockRequest, PieceTracker},
-    piece_manager::{PieceMsg, PmMsg, TaskId, TaskRegInfo, TorrentState},
+    piece_manager::{PieceMsg, PmMsg, TaskId, TaskRegMsg, TorrentState},
 };
 
 use self::message::{Message, MessageCodec, MessageDecodeErr, MessageEncodeErr};
@@ -23,11 +23,11 @@ use self::message::{Message, MessageCodec, MessageDecodeErr, MessageEncodeErr};
 mod message;
 mod piece_tracker;
 
-pub use piece_tracker::ValidatedPiece;
+pub use piece_tracker::{ValidatedPiece, BLOCK_LEN};
 
 type MsgStream = Framed<TcpStream, MessageCodec>;
 
-pub struct PeerTask {
+pub struct Peer {
     /// ID of the task assigned by Piece Manager
     id: TaskId,
     /// IPv4 address of the peer
@@ -53,7 +53,7 @@ pub struct PeerTask {
     piece_tracker: Option<PieceTracker>,
 }
 
-impl PeerTask {
+impl Peer {
     pub fn new(
         id: TaskId,
         socket_addr: SocketAddrV4,
@@ -78,30 +78,33 @@ impl PeerTask {
     }
 
     pub async fn create(
+        id: TaskId,
         socket_addr: SocketAddrV4,
         handshake: Arc<Handshake>,
         metainfo: Arc<Metainfo>,
         pm_sender: Sender<PmMsg>,
-        reg_recv: Receiver<TaskRegInfo>,
         notify_recv: WReceiver<TorrentState>,
-    ) -> Result<(), PeerErr> {
-        pm_sender.send_async(PmMsg::Register).await?;
-        let task_reg_info = reg_recv.recv_async().await?;
+    ) -> Result<Peer, PeerErr> {
+        let (reg_sender, reg_recv) = oneshot::channel::<TaskRegMsg>();
 
-        let peer_task = PeerTask::new(
-            task_reg_info.id,
+        pm_sender
+            .send_async(PmMsg::Register(id, reg_sender))
+            .await?;
+
+        let task_reg_msg = reg_recv.await.map_err(|_| PeerErr::RegErr)?;
+
+        Ok(Peer::new(
+            id,
             socket_addr,
             handshake,
             pm_sender,
-            task_reg_info.piece_recv,
+            task_reg_msg.piece_recv,
             notify_recv,
             metainfo,
-        );
-
-        peer_task.init().await
+        ))
     }
 
-    async fn init(mut self) -> Result<(), PeerErr> {
+    pub async fn start(mut self) -> Result<(), PeerErr> {
         let res = self.process().await;
 
         if res.is_err() {
@@ -109,7 +112,7 @@ impl PeerTask {
                 self.pm_sender
                     .send_async(PmMsg::PieceFailed(pt.pid))
                     .await?;
-                tracing::info!("failure while requesting piece '{}'", pt.pid);
+                tracing::info!("Failure while requesting piece '{}'", pt.pid);
             }
         }
 
@@ -357,6 +360,8 @@ pub enum PeerErr {
     #[error("Received an invalid piece ID from the PieceManager")]
     InvalidPiecePick,
 
+    #[error("Failed to receive the TaskRegMsg from Piece Manager")]
+    RegErr,
     #[error("Message decoding error: '{0}'")]
     InvalidMessage(#[from] MessageDecodeErr),
     #[error("Message encoding error: '{0}'")]

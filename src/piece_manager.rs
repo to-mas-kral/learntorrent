@@ -4,7 +4,10 @@ use bytes::BytesMut;
 use flume::{Receiver, Sender};
 use rand::Rng;
 use thiserror::Error;
-use tokio::sync::watch::{self, Receiver as WReceiver, Sender as WSender};
+use tokio::sync::{
+    oneshot::Sender as OSender,
+    watch::{self, Receiver as WReceiver, Sender as WSender},
+};
 
 use crate::p2p::ValidatedPiece;
 
@@ -17,8 +20,6 @@ pub type TaskId = u32;
 pub type PieceId = u32;
 
 pub struct PieceManager {
-    /// ID for the next registered peer
-    next_id: TaskId,
     /// Map of which peers have which pieces
     peers_pieces: HashMap<TaskId, BitField>,
     /// Pieces that have not been queued for downloaded, or have been restarted
@@ -36,14 +37,12 @@ pub struct PieceManager {
     peers: HashMap<TaskId, Sender<PieceMsg>>,
     /// Receives all kinds of messages
     pm_recv: Receiver<PmMsg>,
-    /// Sends TaskIDd and PieceId rx of a new task
-    register_sender: Sender<TaskRegInfo>,
     /// Sends downloaded and verified pieces to the IO task
     io_sender: Sender<ValidatedPiece>,
+    // TODO: Maybe there's a better way of doing this, but tokio::sync::Notify
+    // didn't seem useful because notify_waiters() doesn't notify waiters that
+    // will register after the call to notified()
     /// For notifying all peer tasks that the torrent is complete
-    /// TODO: Maybe there's a better way of doing this, but tokio::sync::Notify
-    /// didn't seem useful because notify_waiters() doesn't notify waiters that
-    /// will register after the call to notified()
     notify_sender: WSender<TorrentState>,
 }
 
@@ -51,18 +50,11 @@ impl PieceManager {
     pub fn new(
         num_pieces: u32,
         io_sender: Sender<ValidatedPiece>,
-    ) -> (
-        Self,
-        Sender<PmMsg>,
-        Receiver<TaskRegInfo>,
-        WReceiver<TorrentState>,
-    ) {
+    ) -> (Self, Sender<PmMsg>, WReceiver<TorrentState>) {
         let (pm_sender, pm_recv) = flume::unbounded();
-        let (register_sender, register_recv) = flume::bounded(50);
         let (notify_sender, notify_recv) = watch::channel(TorrentState::Incomplete);
 
         let slf = Self {
-            next_id: 0,
             peers_pieces: HashMap::new(),
             piece_queue: piece_list::PieceList::new_full(num_pieces),
             finished_pieces: piece_list::PieceList::new_empty(),
@@ -71,15 +63,14 @@ impl PieceManager {
             missing_pieces: num_pieces,
             peers: HashMap::new(),
             pm_recv,
-            register_sender,
             io_sender,
             notify_sender,
         };
 
-        (slf, pm_sender, register_recv, notify_recv)
+        (slf, pm_sender, notify_recv)
     }
 
-    pub async fn piece_manager(mut self) -> Result<(), PmErr> {
+    pub async fn start(mut self) -> Result<(), PmErr> {
         loop {
             if self.missing_pieces == 0 && self.peers.is_empty() {
                 tracing::info!("Exiting - all pieces downloaded, all peer tasks deregistered");
@@ -95,7 +86,9 @@ impl PieceManager {
                 PmMsg::Pick(task_id) => self.on_pick_msg(task_id).await?,
                 PmMsg::PieceFailed(pid) => self.on_piece_failed(pid),
                 PmMsg::PieceFinished(piece_msg) => self.on_piece_finished_msg(piece_msg).await?,
-                PmMsg::Register => self.on_register_msg().await?,
+                PmMsg::Register(task_id, reg_sender) => {
+                    self.on_register_msg(task_id, reg_sender).await?
+                }
                 PmMsg::Deregister(task_id) => self.on_deregister_msg(task_id),
             }
         }
@@ -198,28 +191,27 @@ impl PieceManager {
         Ok(())
     }
 
-    async fn on_register_msg(&mut self) -> Result<(), PmErr> {
-        let task_info = self.add_peer();
-        self.register_sender.send_async(task_info).await?;
-
-        Ok(())
-    }
-
-    fn add_peer(&mut self) -> TaskRegInfo {
-        let task_id = self.next_id;
-        self.next_id += 1;
+    async fn on_register_msg(
+        &mut self,
+        task_id: TaskId,
+        reg_sender: OSender<TaskRegMsg>,
+    ) -> Result<(), PmErr> {
+        tracing::debug!("Registering peer task '{}'", task_id);
 
         let (piece_sender, piece_recv) = flume::bounded(1);
         self.peers.insert(task_id, piece_sender);
 
-        TaskRegInfo::new(task_id, piece_recv)
+        let task_info = TaskRegMsg::new(piece_recv);
+        reg_sender.send(task_info).map_err(|_| PmErr::TaskRegErr)?;
+
+        Ok(())
     }
 
     fn on_deregister_msg(&mut self, task_id: u32) {
+        tracing::debug!("Deregistering peer task '{}'", task_id);
+
         self.peers.remove(&task_id);
         self.peers_pieces.remove(&task_id);
-
-        tracing::debug!("Deregistering peer task '{}'", task_id,);
     }
 }
 
@@ -231,14 +223,13 @@ pub enum TorrentState {
     Incomplete,
 }
 
-pub struct TaskRegInfo {
-    pub id: TaskId,
+pub struct TaskRegMsg {
     pub piece_recv: Receiver<PieceMsg>,
 }
 
-impl TaskRegInfo {
-    pub fn new(id: TaskId, piece_recv: Receiver<PieceMsg>) -> Self {
-        Self { id, piece_recv }
+impl TaskRegMsg {
+    pub fn new(piece_recv: Receiver<PieceMsg>) -> Self {
+        Self { piece_recv }
     }
 }
 
@@ -263,17 +254,19 @@ pub enum PmMsg {
     PieceFinished(ValidatedPiece),
 
     /// Peer task wants to be registered
-    Register,
+    Register(TaskId, OSender<TaskRegMsg>),
     /// Peer task wants to be deregistered
     Deregister(TaskId),
 }
 
 #[derive(Error, Debug)]
 pub enum PmErr {
+    #[error("Failed to send a TaskRegMsg to a peer")]
+    TaskRegErr,
     #[error("Channel error while notifying peer tasks")]
     TaskNotifyErr(#[from] watch::error::SendError<TorrentState>),
     #[error("Channel error while sending a register to a peer task")]
-    RegisterSendErr(#[from] flume::SendError<TaskRegInfo>),
+    RegisterSendErr(#[from] flume::SendError<TaskRegMsg>),
     #[error("Channel error while sending a message to the IO task")]
     IoTaskSendErr(#[from] flume::SendError<ValidatedPiece>),
     #[error("Channel error while sending a message to a peer task")]

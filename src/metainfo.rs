@@ -6,7 +6,6 @@ use crate::{
     piece_manager::PieceId,
 };
 
-#[derive(Debug)]
 pub struct Metainfo {
     /// Tracker URL
     pub announce: String,
@@ -39,7 +38,7 @@ impl Metainfo {
             Self::sha1(info_slice)
         };
 
-        let piece_hashes = info.expect("pieces")?.get_str()?.clone();
+        let piece_hashes = info.expect("pieces")?.get_str()?;
 
         let file = if let Some(files) = info.get_mut("files") {
             let files = files.get_list()?;
@@ -56,7 +55,7 @@ impl Metainfo {
         let total_length = file.expect("length")?.get_uint()?;
 
         let md5sum = match file.get_mut("md5sum") {
-            Some(md5) => Some(md5.get_str()?.clone()),
+            Some(md5) => Some(md5.get_str()?),
             None => None,
         };
 
@@ -105,6 +104,20 @@ impl Metainfo {
         let mut hasher = Sha1::new();
         hasher.update(src);
         hasher.finalize().to_vec()
+    }
+}
+
+impl std::fmt::Debug for Metainfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Metainfo")
+            .field("announce", &self.announce)
+            .field("info_hash", &self.info_hash)
+            .field("piece_length", &self.piece_length)
+            .field("total_length", &self.total_length)
+            .field("name", &self.name)
+            .field("piece_hashes", &format_args!("<piece hashes>"))
+            .field("md5sum", &self.md5sum)
+            .finish()
     }
 }
 
