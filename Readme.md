@@ -9,14 +9,18 @@ There is more room for improvement in this area, but a basic io_uring setup is f
 # Architecture
 ![Architecture](resources/diagram.svg)
 
+# Questions
+- [ ] Tracing on panic ?
+
 # TODO
-- [ ] (dev) error handling
-- [ ] Periodically contacting the tracker to get new peers
+- [ ] Periodically contacting the trackers to get new peers
 - [ ] Rarest-first piece picking algorithm
 - [ ] [FastPeers](https://wiki.theory.org/BitTorrentSpecification#Fast_Peers_Extensions) extension
 - [ ] [DHT](https://wiki.theory.org/BitTorrentSpecification#Distributed_Hash_Table)
 
 # Sources
 - Unofficial specification: https://wiki.theory.org/BitTorrentSpecification <br/>
+- UDP tracker protocol specs: https://github.com/steeve/libtorrent/blob/master/docs/udp_tracker_protocol.rst#request-string <br/>
+
 - Guide - https://www.seanjoflynn.com/research/bittorrent.html <br/>
 - Guide: https://blog.jse.li/posts/torrent/ <br/>

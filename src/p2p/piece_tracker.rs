@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use sha1::{Digest, Sha1};
 
 use super::PeerErr;
-use crate::{metainfo::Metainfo, piece_manager::PieceId};
+use crate::{metainfo::Metainfo, piece_keeper::PieceId};
 
 /// Tracks download progress of the current piece
 pub struct PieceTracker {
@@ -102,6 +102,7 @@ impl PieceTracker {
             self.completed_requests
                 .sort_by(|a, b| a.offset.cmp(&b.offset));
 
+            // TODO: investigate spawn_blocking
             let mut hasher = Sha1::new();
             for b in &self.completed_requests {
                 hasher.update(&b.bytes);
@@ -112,10 +113,9 @@ impl PieceTracker {
 
         // The length of the metainfo hash string must have been validated,
         // so it should contain all valid pieces
-        // 'None' means that this task received an invalid piece from the PieceManager
-        let expected_hash = metainfo
-            .get_hash(self.pid)
-            .ok_or(PeerErr::InvalidPiecePick)?;
+        let expected_hash = metainfo.get_hash(self.pid).expect(
+            "Internal error: a peer task received an invalid piece ID from the Piece Keeper",
+        );
 
         if expected_hash == piece_hash.as_slice() {
             Ok(Some(ValidatedPiece {
@@ -139,6 +139,7 @@ impl PendingBlockRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct CompletedBlockRequest {
     pub offset: u32,
     pub size: u32,
@@ -157,6 +158,7 @@ impl CompletedBlockRequest {
 
 /// Created by calling 'validate()' on PieceTracker
 /// The completed requests are sorted and validated
+#[derive(Debug)]
 pub struct ValidatedPiece {
     /// ID of the piece
     pub pid: PieceId,

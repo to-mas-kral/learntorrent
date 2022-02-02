@@ -46,7 +46,18 @@ impl Dict {
     where
         F: FnOnce(&mut BeValue) -> ReponseParseResult<T>,
     {
-        let res = self.vals.get_mut(k).map(f);
+        let res = self.get_mut(k).map(f);
+
+        res.transpose()
+    }
+
+    // TODO: solve lifetime issue by using |BeVaule| -> &mut T in the previous method
+    /// Extracts an optional field into a specific type
+    pub fn try_get_ref_mut<T, F>(&mut self, k: &str, f: F) -> ReponseParseResult<Option<&mut T>>
+    where
+        F: FnOnce(&mut BeValue) -> ReponseParseResult<&mut T>,
+    {
+        let res = self.get_mut(k).map(f);
 
         res.transpose()
     }
@@ -85,9 +96,16 @@ impl BeValue {
         }
     }
 
-    pub fn get_uint(&mut self) -> ReponseParseResult<u64> {
+    pub fn get_u64(&mut self) -> ReponseParseResult<u64> {
         match self {
             BeValue::Int(i) => Ok(u64::try_from(*i)?),
+            t => Err(ResponseParseError::InvalidType("integer", t.label())),
+        }
+    }
+
+    pub fn get_u32(&mut self) -> ReponseParseResult<u32> {
+        match self {
+            BeValue::Int(i) => Ok(u32::try_from(*i)?),
             t => Err(ResponseParseError::InvalidType("integer", t.label())),
         }
     }

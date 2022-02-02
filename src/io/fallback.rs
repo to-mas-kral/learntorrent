@@ -40,7 +40,11 @@ impl Io {
                 return Ok(());
             }
 
-            let piece_msg = self.rx.recv_async().await?;
+            let piece_msg = self
+                .rx
+                .recv_async()
+                .await
+                .expect("Internal error: I/O couldn't receive messages from Piece Keeper");
             self.on_piece_msg(piece_msg, &mut writer).await?;
         }
     }
@@ -70,8 +74,6 @@ impl Io {
 
 #[derive(Error, Debug)]
 pub enum IoErr {
-    #[error("Channel error while receiving messages")]
-    ChannelRecvErr(#[from] flume::RecvError),
     #[error("IO error: '{0}")]
     FileCreationErr(#[from] std::io::Error),
 }

@@ -56,6 +56,8 @@ impl Decoder for MessageCodec {
         const LEN_MARKER_SIZE: usize = 4;
         const ID_MARKER_SIZE: usize = 1;
 
+        // TODO(reliability): check the length against a maximum message size
+
         // Not enough bytes for the length
         if src.len() < LEN_MARKER_SIZE {
             return Ok(None);
@@ -141,7 +143,6 @@ impl Decoder for MessageCodec {
     }
 }
 
-// TODO: why does MessageEncodeErr have to implement From<io:Error> ??
 #[derive(Error, Debug)]
 pub enum MessageEncodeErr {
     #[error("IO error: '{0}'")]

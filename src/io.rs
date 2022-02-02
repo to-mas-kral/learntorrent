@@ -6,4 +6,4 @@ pub use fallback::{Io, IoErr};
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{Io, IoErr};
+pub use linux::{Io, IoErr, IoMsg};

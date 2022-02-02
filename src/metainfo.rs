@@ -3,14 +3,14 @@ use thiserror::Error;
 
 use crate::{
     bencoding::bevalue::{BeValue, ResponseParseError},
-    piece_manager::PieceId,
+    piece_keeper::PieceId,
 };
 
 pub struct Metainfo {
-    /// Tracker URL
-    pub announce: String,
+    /// Tracker URLs
+    pub trackers: Vec<String>,
     /// Hash of the info dictionary
-    pub info_hash: Vec<u8>,
+    pub info_hash: Box<[u8; 20]>,
     /// Number of bytes of 1 piece
     pub piece_length: u32,
     /// Length of the file in bytes (only single-file mode now)
@@ -19,19 +19,33 @@ pub struct Metainfo {
     pub name: String,
     /// SHA1 hashes if the individual pieces
     pub piece_hashes: Vec<u8>,
-    /// MD5 hash of the whole file
-    pub md5sum: Option<Vec<u8>>,
 }
 
 impl Metainfo {
     pub fn from_src_be(src: &[u8], mut be: BeValue) -> MiResult<Self> {
         let torrent = be.get_dict()?;
 
+        // TODO: support for torrent with only announce-list field
         let announce = torrent.expect("announce")?.get_str_utf8()?;
+        let mut trackers = vec![announce];
+
+        let announce_list = torrent.try_get_ref_mut("announce-list", BeValue::get_list)?;
+        // Why is this a list of lists ??
+        if let Some(announce_list) = announce_list {
+            for l in announce_list {
+                let url_list = l.get_list()?;
+                let url = url_list
+                    .get_mut(0)
+                    .ok_or(MiError::MalformedAnnouceList)?
+                    .get_str_utf8()?;
+
+                trackers.push(url);
+            }
+        }
 
         let info = torrent.expect("info")?.get_dict()?;
 
-        let piece_length = info.expect("piece length")?.get_uint()? as u32;
+        let piece_length = info.expect("piece length")?.get_u32()?;
         let name = info.expect("name")?.get_str_utf8()?;
         let info_hash = {
             let info_slice = &src[info.src_range.clone()];
@@ -52,21 +66,15 @@ impl Metainfo {
             info
         };
 
-        let total_length = file.expect("length")?.get_uint()?;
-
-        let md5sum = match file.get_mut("md5sum") {
-            Some(md5) => Some(md5.get_str()?),
-            None => None,
-        };
+        let total_length = file.expect("length")?.get_u64()?;
 
         let mi = Metainfo {
-            announce,
+            trackers,
             info_hash,
             piece_length,
             total_length,
             name,
             piece_hashes,
-            md5sum,
         };
 
         // Validate the length of the hashes string
@@ -100,23 +108,24 @@ impl Metainfo {
         }
     }
 
-    fn sha1(src: &[u8]) -> Vec<u8> {
+    fn sha1(src: &[u8]) -> Box<[u8; 20]> {
         let mut hasher = Sha1::new();
         hasher.update(src);
-        hasher.finalize().to_vec()
+
+        let gen_arr = hasher.finalize();
+        Box::new(gen_arr.into())
     }
 }
 
 impl std::fmt::Debug for Metainfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Metainfo")
-            .field("announce", &self.announce)
+            .field("announce", &self.trackers)
             .field("info_hash", &self.info_hash)
             .field("piece_length", &self.piece_length)
             .field("total_length", &self.total_length)
             .field("name", &self.name)
             .field("piece_hashes", &format_args!("<piece hashes>"))
-            .field("md5sum", &self.md5sum)
             .finish()
     }
 }
@@ -129,4 +138,6 @@ pub enum MiError {
     BeError(#[from] ResponseParseError),
     #[error("Hashes length '{0}' should be a multiple of 20")]
     InvalidHashesLen(usize),
+    #[error("Announce list is malformed")]
+    MalformedAnnouceList,
 }
