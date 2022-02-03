@@ -1,79 +1,43 @@
 use std::{io::SeekFrom, sync::Arc};
 
-use thiserror::Error;
+use async_trait::async_trait;
 use tokio::{
     fs::File,
     io::{AsyncSeekExt, AsyncWriteExt, BufWriter},
 };
 
+use super::{IoErr, PieceSave};
 use crate::{metainfo::Metainfo, p2p::ValidatedPiece};
 
-/// Struct for saving the donwloaded pieces to disk.
-pub struct Io {
-    rx: flume::Receiver<ValidatedPiece>,
+pub struct PieceSaver {
     metainfo: Arc<Metainfo>,
-    missing_pieces: u32,
+    writer: BufWriter<File>,
 }
 
-impl Io {
-    pub fn new(metainfo: Arc<Metainfo>) -> (Self, flume::Sender<ValidatedPiece>) {
-        let (tx, rx) = flume::bounded(100);
+#[async_trait]
+impl PieceSave for PieceSaver {
+    async fn new(metainfo: Arc<Metainfo>) -> Result<Self, IoErr> {
+        let file = File::create(&metainfo.name).await?;
+        let writer = BufWriter::new(file);
 
-        let s = Self {
-            rx,
-            missing_pieces: metainfo.piece_count(),
-            metainfo,
-        };
-
-        (s, tx)
+        Ok(Self { metainfo, writer })
     }
 
-    pub async fn start(mut self) -> Result<(), IoErr> {
-        let file = File::create(&self.metainfo.name).await?;
+    async fn on_piece_msg(&mut self, piece: ValidatedPiece) -> Result<(), IoErr> {
+        let piece_offset = piece.pid * self.metainfo.piece_length;
 
-        // I really don't know if bigger buffer sizes make sense
-        let mut writer = BufWriter::with_capacity(10 * 1024 * 1024, file);
+        self.writer
+            .seek(SeekFrom::Start(piece_offset as u64))
+            .await?;
 
-        loop {
-            if self.missing_pieces == 0 {
-                tracing::info!("Exiting - all pieces have been saved to disk");
-                return Ok(());
-            }
-
-            let piece_msg = self
-                .rx
-                .recv_async()
-                .await
-                .expect("Internal error: I/O couldn't receive messages from Piece Keeper");
-            self.on_piece_msg(piece_msg, &mut writer).await?;
-        }
-    }
-
-    async fn on_piece_msg(
-        &mut self,
-        pm: ValidatedPiece,
-        writer: &mut BufWriter<File>,
-    ) -> Result<(), IoErr> {
-        let piece_offset = pm.pid * self.metainfo.piece_length;
-
-        writer.seek(SeekFrom::Start(piece_offset as u64)).await?;
-
-        for b in pm.completed_requests {
-            writer.write_all_buf(&mut b.bytes.as_ref()).await?;
+        for b in piece.completed_requests {
+            self.writer.write_all_buf(&mut b.bytes.as_ref()).await?;
         }
 
-        writer.flush().await?;
+        self.writer.flush().await?;
 
-        tracing::debug!("Piece '{}' written to file", pm.pid);
-
-        self.missing_pieces -= 1;
+        tracing::debug!("Piece '{}' written to file", piece.pid);
 
         Ok(())
     }
-}
-
-#[derive(Error, Debug)]
-pub enum IoErr {
-    #[error("IO error: '{0}")]
-    FileCreationErr(#[from] std::io::Error),
 }

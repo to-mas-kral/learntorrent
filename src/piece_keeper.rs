@@ -200,7 +200,7 @@ impl PieceKeeper {
         self.finished_pieces.insert(piece_msg.pid);
 
         self.missing_pieces -= 1;
-        // TODO: move this somewhere else
+        // TODO(UI): move this somewhere else
         let ratio = if self.missing_pieces == 0 {
             1f64
         } else {

@@ -80,6 +80,7 @@ impl TrackerManager {
 
     pub async fn start(mut self) -> TrResult<()> {
         let total_trackers = self.metainfo.trackers.len();
+        // FIXME: trackers len can be 0
         let (tracker_sender, mut tracker_recv) = mpsc::channel::<Vec<SocketAddrV4>>(total_trackers);
         let tracker_tasks = self.spawn_trackers(&self.metainfo.trackers, tracker_sender);
 

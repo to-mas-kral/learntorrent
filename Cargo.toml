@@ -23,6 +23,8 @@ futures-util = "0.3.19"
 sha-1 = "0.10.0"
 rand = "0.8.4"
 
+async-trait = "0.1.52"
+
 thiserror = "1.0.30"
 eyre = "0.6.6"
 

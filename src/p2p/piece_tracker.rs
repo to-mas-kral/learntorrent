@@ -102,7 +102,7 @@ impl PieceTracker {
             self.completed_requests
                 .sort_by(|a, b| a.offset.cmp(&b.offset));
 
-            // TODO: investigate spawn_blocking
+            // INVESTIGATE: spawn_blocking
             let mut hasher = Sha1::new();
             for b in &self.completed_requests {
                 hasher.update(&b.bytes);

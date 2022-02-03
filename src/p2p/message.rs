@@ -33,6 +33,9 @@ pub enum Message {
     Cancel { index: u32, begin: u32, len: u32 },
 }
 
+/// 1 megabyte
+const MAXIMUM_PACKET_SIZE: usize = 1048576;
+
 pub struct MessageCodec;
 
 #[derive(Error, Debug)]
@@ -43,6 +46,8 @@ pub enum MessageDecodeErr {
     InvalidMessage(u32, u8),
     #[error("The 'port' message is unimplemented")]
     PortUnimplemented,
+    #[error("Maximum packet size exceeded")]
+    MaximumSizeExceeded,
 }
 
 impl Decoder for MessageCodec {
@@ -56,7 +61,9 @@ impl Decoder for MessageCodec {
         const LEN_MARKER_SIZE: usize = 4;
         const ID_MARKER_SIZE: usize = 1;
 
-        // TODO(reliability): check the length against a maximum message size
+        if src.len() >= MAXIMUM_PACKET_SIZE {
+            return Err(MessageDecodeErr::MaximumSizeExceeded);
+        }
 
         // Not enough bytes for the length
         if src.len() < LEN_MARKER_SIZE {

@@ -159,6 +159,7 @@ impl PieceList {
         None
     }
 
+    #[allow(dead_code)]
     pub fn all_finished(&self, piece_count: u32) -> bool {
         self.blocks.len() == 1 && self.blocks[0] == (0, piece_count - 1)
     }

@@ -40,18 +40,17 @@ impl UdpTracker {
 
     /// "2 kilobytes should be enough for everyone"
     /// (enough for exactly 338 peers)
-    const MAXIMUM_READ_SIZE: usize = 2048;
+    const MAXIMUM_PACKET_SIZE: usize = 2048;
 
     pub async fn announce(
         &mut self,
         metainfo: &Metainfo,
         client_id: &[u8; 20],
     ) -> TrResult<TrackerResponse> {
-        let mut read_buffer = vec![0; Self::MAXIMUM_READ_SIZE];
+        let mut read_buffer = vec![0; Self::MAXIMUM_PACKET_SIZE];
 
         let (connect_msg, trans_id) = TrackerRequestMsg::new_connect();
 
-        // TODO: check if we have a usable connection id
         // TODO: retries and timeouts
         self.send_msg(connect_msg).await?;
         let connect_resp = self.recv_msg(&mut read_buffer).await?;
@@ -86,7 +85,7 @@ impl UdpTracker {
     async fn recv_msg(&self, buf: &mut [u8]) -> TrResult<TrackerResponseMsg> {
         let bytes_read = self.socket.recv(buf).await?;
 
-        if bytes_read >= Self::MAXIMUM_READ_SIZE {
+        if bytes_read >= Self::MAXIMUM_PACKET_SIZE {
             tracing::warn!("Received UDP packet might have been bigger than the max size");
         }
 
@@ -211,7 +210,6 @@ impl<'h> TrackerRequestMsg<'h> {
                 put_u32(event as u32, &mut buf);
                 put_u32(0, &mut buf); // ip
                 put_u32(rand::random(), &mut buf); // key
-                                                   // TODO: check if numwant this is correct
                 put_u32(u32::MAX, &mut buf); // numwant
                 put_u16(port, &mut buf);
 

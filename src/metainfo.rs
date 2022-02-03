@@ -2,7 +2,7 @@ use sha1::{Digest, Sha1};
 use thiserror::Error;
 
 use crate::{
-    bencoding::bevalue::{BeValue, ResponseParseError},
+    bencoding::bevalue::{BeValue, Dict, ResponseParseError},
     piece_keeper::PieceId,
 };
 
@@ -25,23 +25,7 @@ impl Metainfo {
     pub fn from_src_be(src: &[u8], mut be: BeValue) -> MiResult<Self> {
         let torrent = be.get_dict()?;
 
-        // TODO: support for torrent with only announce-list field
-        let announce = torrent.expect("announce")?.get_str_utf8()?;
-        let mut trackers = vec![announce];
-
-        let announce_list = torrent.try_get_ref_mut("announce-list", BeValue::get_list)?;
-        // Why is this a list of lists ??
-        if let Some(announce_list) = announce_list {
-            for l in announce_list {
-                let url_list = l.get_list()?;
-                let url = url_list
-                    .get_mut(0)
-                    .ok_or(MiError::MalformedAnnouceList)?
-                    .get_str_utf8()?;
-
-                trackers.push(url);
-            }
-        }
+        let trackers = Self::parse_trackers(torrent)?;
 
         let info = torrent.expect("info")?.get_dict()?;
 
@@ -85,6 +69,39 @@ impl Metainfo {
         }
 
         Ok(mi)
+    }
+
+    // announce      = single URL
+    // announce-list = list of lists URLs
+    // url-list      = list of URLs
+    fn parse_trackers(torrent: &mut Dict) -> Result<Vec<String>, MiError> {
+        let mut trackers = torrent
+            .try_get("announce", BeValue::get_str_utf8)?
+            .and_then(|a| Some(vec![a]))
+            .unwrap_or(vec![]);
+
+        let announce_list = torrent.try_get_ref_mut("announce-list", BeValue::get_list)?;
+        if let Some(announce_list) = announce_list {
+            for l in announce_list {
+                let url_list = l.get_list()?;
+                let url = url_list
+                    .get_mut(0)
+                    .ok_or(MiError::MalformedAnnouceList)?
+                    .get_str_utf8()?;
+
+                trackers.push(url);
+            }
+        }
+
+        let url_list = torrent.try_get_ref_mut("url-list", BeValue::get_list)?;
+        if let Some(url_list) = url_list {
+            for url in url_list {
+                let url = url.get_str_utf8()?;
+                trackers.push(url);
+            }
+        }
+
+        Ok(trackers)
     }
 
     /// Returns the hash of a specified piece

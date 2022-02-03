@@ -6,16 +6,21 @@ use self::bevalue::{BeValue, Dict};
 
 pub mod bevalue;
 
-// TODO: should check for recursion depth
-
 pub struct BeParser<'s> {
     src: &'s [u8],
     pos: usize,
+    recursion_depth: u32,
 }
+
+const MAX_NESTING_DEPTH: u32 = 16;
 
 impl<'s> BeParser<'s> {
     pub fn new(src: &'s [u8]) -> Self {
-        Self { src, pos: 0 }
+        Self {
+            src,
+            pos: 0,
+            recursion_depth: 0,
+        }
     }
 
     pub fn parse_with(src: &'s [u8]) -> Result<BeValue, BeDecodeErr> {
@@ -24,14 +29,24 @@ impl<'s> BeParser<'s> {
     }
 
     pub fn parse_value(&mut self) -> Result<BeValue, BeDecodeErr> {
-        match self.peek() {
+        if self.recursion_depth > MAX_NESTING_DEPTH {
+            return Err(BeDecodeErr::MaxNestingDepthExceeded);
+        }
+
+        self.recursion_depth += 1;
+
+        let res = match self.peek() {
             Some(b'i') => Ok(BeValue::Int(self.parse_int()?)),
             Some(b'l') => Ok(BeValue::List(self.parse_list()?)),
             Some(b'd') => Ok(BeValue::Dict(self.parse_dict()?)),
             Some(c) if c.is_ascii_digit() => Ok(BeValue::Str(self.parse_str()?)),
             Some(i) => Err(BeDecodeErr::InvalidInitialByte(*i)),
             None => Err(BeDecodeErr::UnexpectedEnd),
-        }
+        };
+
+        self.recursion_depth -= 1;
+
+        res
     }
 
     /// i<integer encoded in base ten ASCII>e
@@ -57,7 +72,6 @@ impl<'s> BeParser<'s> {
 
         self.expect(b':')?;
 
-        // TODO: have some allocation limits
         let mut string = Vec::with_capacity(len as usize);
         for _ in 0..len {
             match self.next() {
@@ -76,7 +90,7 @@ impl<'s> BeParser<'s> {
 
         let num = digits
             .parse::<u64>()
-            .map_err(|_| BeDecodeErr::InvalidStrLen(digits.to_string()))?;
+            .map_err(|_| BeDecodeErr::InvalidStrLen)?;
 
         Ok(num)
     }
@@ -117,12 +131,13 @@ impl<'s> BeParser<'s> {
                         break;
                     }
                     _ => {
-                        // TODO: verify if dict keys have to be UTF-8 or just bytes
                         let key = String::from_utf8(self.parse_str()?)?;
                         let val = self.parse_value()?;
 
-                        // TODO: should probably check for non-unique keys (and sorted ?)
-                        dict.insert(key, val);
+                        let already_in = dict.insert(key, val);
+                        if already_in.is_some() {
+                            return Err(BeDecodeErr::DuplicateDictKeys);
+                        }
                     }
                 },
                 None => return Err(BeDecodeErr::UnexpectedEnd),
@@ -162,21 +177,25 @@ impl<'s> BeParser<'s> {
         self.src.get(self.pos)
     }
 }
-
+// TODO: should include a span in the error messages
 #[derive(Error, Debug)]
 pub enum BeDecodeErr {
     #[error("The byte stream ended unexpectedly")]
     UnexpectedEnd,
     #[error("Initial element character should be either a digit, 'i', 'l' or 'd', got: {0}")]
     InvalidInitialByte(u8),
-    #[error("The integer: {0}, is not a valid string length")]
-    InvalidStrLen(String),
+    #[error("Encountered invalid string length")]
+    InvalidStrLen,
     #[error("Invalid number: '{0}")]
     InvalidNum(#[from] std::num::TryFromIntError),
     #[error("Unexpected byte: {0:?}")]
     Unexpected(Option<u8>),
     #[error("Dictionary key must be a valid UTF-8 string. {0}")]
     InvalidDictKey(#[from] std::string::FromUtf8Error),
+    #[error("Max nesting depth was exceeded")]
+    MaxNestingDepthExceeded,
+    #[error("Duplicate dict keys encountered")]
+    DuplicateDictKeys,
 }
 
 #[cfg(test)]
@@ -207,8 +226,6 @@ mod test {
         BeParser::parse_with("ia1e".as_bytes()).expect_err("");
         BeParser::parse_with("i1ae".as_bytes()).expect_err("");
         BeParser::parse_with("ia1be".as_bytes()).expect_err("");
-        // TODO: more number parsing validation (i-0e is invalid, leading zeros other than i0e are invalid)
-        //BeParser::parse_with("i-0e".as_bytes()).expect_err("");
     }
 
     #[test]

@@ -45,7 +45,8 @@ async fn main() -> Result<()> {
     let (io_sender, io_recv) = mpsc::channel(128);
     let (pm_sender, pm_recv) = flume::bounded(128);
 
-    let io = Io::new(io_recv, appstate_recv.clone(), Arc::clone(&metainfo))
+    let io = Io::new(io_recv, Arc::clone(&metainfo))
+        .await
         .wrap_err("Couldn't initialize the I/O task")?;
 
     let pm = PieceKeeper::new(
