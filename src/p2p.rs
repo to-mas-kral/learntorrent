@@ -14,7 +14,7 @@ use tokio_util::codec::Framed;
 
 use crate::{
     metainfo::Metainfo,
-    p2p::piece_tracker::{CompletedBlockRequest, PieceTracker},
+    p2p::piece_tracker::PieceTracker,
     piece_keeper::{PieceMsg, PmMsg, TaskId, TaskRegMsg, TorrentState},
     AppState,
 };
@@ -24,7 +24,7 @@ use self::message::{Message, MessageCodec, MessageDecodeErr, MessageEncodeErr};
 mod message;
 mod piece_tracker;
 
-pub use piece_tracker::{ValidatedPiece, BLOCK_LEN};
+pub use piece_tracker::{CompletedBlockRequest, ValidatedPiece, BLOCK_LEN};
 
 type MsgStream = Framed<TcpStream, MessageCodec>;
 
@@ -150,7 +150,7 @@ impl Peer {
         let mut first_message = true;
         loop {
             self.pick_piece().await?;
-            self.queue_requests(&mut msg_stream).await?;
+            self.request_blocks(&mut msg_stream).await?;
             self.send_interested(&mut msg_stream).await?;
 
             tokio::select! {
@@ -321,7 +321,7 @@ impl Peer {
 
     /// If we are currently downloading a piece, ask the peer for some new
     /// blocks if needed
-    async fn queue_requests(&mut self, msg_stream: &mut MsgStream) -> PeerResult<()> {
+    async fn request_blocks(&mut self, msg_stream: &mut MsgStream) -> PeerResult<()> {
         if let Some(pt) = &mut self.piece_tracker {
             let piece_id = pt.pid;
             for r in pt.next_requests() {
@@ -417,8 +417,8 @@ pub enum PeerErr {
     InvalidHandshake,
     #[error("Received a block related to a different piece")]
     InvalidPieceReceived,
-    #[error("Received a block of invalid size")]
-    InvalidBlockSize,
+    #[error("Received a block with invalid attributes")]
+    InvalidBlock,
     #[error("'Bitfield' message wasn't the first message")]
     BitfieldNotFirst,
     #[error("'Bitfield' message wasn invalid")]

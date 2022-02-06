@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, sync::Arc};
+use std::io::SeekFrom;
 
 use async_trait::async_trait;
 use tokio::{
@@ -6,37 +6,32 @@ use tokio::{
     io::{AsyncSeekExt, AsyncWriteExt, BufWriter},
 };
 
-use super::{IoErr, PieceSave};
-use crate::{metainfo::Metainfo, p2p::ValidatedPiece};
+use super::{IoErr, IoPiece, PieceSave};
 
 pub struct PieceSaver {
-    metainfo: Arc<Metainfo>,
-    writer: BufWriter<File>,
+    writers: Vec<BufWriter<File>>,
 }
 
 #[async_trait]
 impl PieceSave for PieceSaver {
-    async fn new(metainfo: Arc<Metainfo>) -> Result<Self, IoErr> {
-        let file = File::create(&metainfo.name).await?;
-        let writer = BufWriter::new(file);
+    async fn new(files: Vec<File>) -> Result<Self, IoErr> {
+        let writers = files.into_iter().map(|f| BufWriter::new(f)).collect();
 
-        Ok(Self { metainfo, writer })
+        Ok(Self { writers })
     }
 
-    async fn on_piece_msg(&mut self, piece: ValidatedPiece) -> Result<(), IoErr> {
-        let piece_offset = piece.pid * self.metainfo.piece_length;
+    async fn on_piece_msg(&mut self, piece: IoPiece) -> Result<(), IoErr> {
+        let writer = &mut self.writers[piece.file_index];
 
-        self.writer
-            .seek(SeekFrom::Start(piece_offset as u64))
-            .await?;
+        writer.seek(SeekFrom::Start(piece.offset as u64)).await?;
 
-        for b in piece.completed_requests {
-            self.writer.write_all_buf(&mut b.bytes.as_ref()).await?;
+        for b in piece.blocks {
+            writer.write_all_buf(&mut b.bytes.as_ref()).await?;
         }
 
-        self.writer.flush().await?;
+        writer.flush().await?;
 
-        tracing::debug!("Piece '{}' written to file", piece.pid);
+        tracing::debug!("Piece with offset '{}' written to file", piece.offset);
 
         Ok(())
     }

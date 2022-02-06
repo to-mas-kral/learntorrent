@@ -1,37 +1,32 @@
-use std::{os::unix::prelude::AsRawFd, sync::Arc};
+use std::os::unix::prelude::AsRawFd;
 
 use async_trait::async_trait;
 use io_uring::{opcode, types, IoUring};
 use tokio::fs::File;
 
-use super::{IoErr, PieceSave};
-use crate::{metainfo::Metainfo, p2p::ValidatedPiece};
+use super::{IoErr, IoPiece, PieceSave};
 
 pub struct PieceSaver {
-    metainfo: Arc<Metainfo>,
     ring: IoUring,
-    file: File,
+    files: Vec<File>,
 }
 
 const RING_LEN: u32 = 1;
 
 #[async_trait]
 impl PieceSave for PieceSaver {
-    async fn new(metainfo: Arc<Metainfo>) -> Result<Self, IoErr> {
-        let file = File::create(&metainfo.name).await?;
-
+    async fn new(files: Vec<File>) -> Result<Self, IoErr> {
         Ok(Self {
-            metainfo,
             ring: IoUring::new(RING_LEN)?,
-            file,
+            files,
         })
     }
 
-    async fn on_piece_msg(&mut self, piece: ValidatedPiece) -> Result<(), IoErr> {
-        let piece_offset = piece.pid * self.metainfo.piece_length;
+    async fn on_piece_msg(&mut self, piece: IoPiece) -> Result<(), IoErr> {
+        let file = &self.files[piece.file_index];
 
         let iovecs: Vec<libc::iovec> = piece
-            .completed_requests
+            .blocks
             .iter()
             .map(|cr| libc::iovec {
                 iov_base: cr.bytes.as_ptr() as _,
@@ -40,13 +35,13 @@ impl PieceSave for PieceSaver {
             .collect();
 
         let write_sub = opcode::Writev::new(
-            types::Fd(self.file.as_raw_fd()),
+            types::Fd(file.as_raw_fd()),
             iovecs.as_ptr(),
             iovecs.len() as u32,
         )
-        .offset(piece_offset as i64)
+        .offset(piece.offset as i64)
         .build()
-        .user_data(piece.pid as u64);
+        .user_data(piece.offset as u64);
 
         // INVESTIGATE: replace io_uring with an ordinary pwritev syscall since we are only
         // submitting 1 operation at a time
@@ -60,14 +55,14 @@ impl PieceSave for PieceSaver {
 
         self.ring.submit_and_wait(1)?;
 
-        // UNWRAP: queue should have at least one item because we just waited for it to complete
+        // UNWRAP: queue should have at least one item because we just waited for completion
         let cqe = self.ring.completion().next().unwrap();
 
         if cqe.result() == -1 {
             return Err(IoErr::Uring);
         }
 
-        tracing::debug!("Piece '{}' written to file", cqe.user_data());
+        tracing::debug!("Piece with offset '{}' written to file", cqe.user_data());
 
         Ok(())
     }

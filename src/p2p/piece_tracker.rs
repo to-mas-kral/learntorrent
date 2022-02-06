@@ -10,7 +10,7 @@ pub struct PieceTracker {
     pub pid: PieceId,
     /// Size of the piece in bytes
     pub piece_size: u32,
-    /// Marks the amount of bytes that have been downloaded already
+    /// Marks the amount of bytes that have been already downloaded
     pub offset: u32,
     /// Pending *block* requests
     pub pending_requests: Vec<PendingBlockRequest>,
@@ -64,11 +64,11 @@ impl PieceTracker {
         let new_requests = MAX_PENDING_REQUESTS - current_requests;
 
         if new_requests > 0 {
-            for _ in 0..new_requests {
+            for queued in 0..new_requests {
                 if let Some(pr) = self.next_pending_request() {
                     self.pending_requests.push(pr)
                 } else {
-                    return &[];
+                    return &self.pending_requests[..queued];
                 }
             }
 
@@ -84,7 +84,7 @@ impl PieceTracker {
             .pending_requests
             .iter()
             .position(|pr| pr.offset == req.offset && pr.size == req.size)
-            .ok_or(PeerErr::InvalidBlockSize)?;
+            .ok_or(PeerErr::InvalidBlock)?;
         self.pending_requests.remove(index);
 
         self.remaining_bytes -= req.size;
@@ -113,14 +113,14 @@ impl PieceTracker {
 
         // The length of the metainfo hash string must have been validated,
         // so it should contain all valid pieces
-        let expected_hash = metainfo.get_hash(self.pid).expect(
+        let expected_hash = metainfo.piece_hashes.get(self.pid as usize).expect(
             "Internal error: a peer task received an invalid piece ID from the Piece Keeper",
         );
 
         if expected_hash == piece_hash.as_slice() {
             Ok(Some(ValidatedPiece {
                 pid: self.pid,
-                completed_requests: self.completed_requests,
+                blocks: self.completed_requests,
             }))
         } else {
             Ok(None)
@@ -140,6 +140,7 @@ impl PendingBlockRequest {
 }
 
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct CompletedBlockRequest {
     pub offset: u32,
     pub size: u32,
@@ -163,5 +164,5 @@ pub struct ValidatedPiece {
     /// ID of the piece
     pub pid: PieceId,
     /// Completed *block* requests
-    pub completed_requests: Vec<CompletedBlockRequest>,
+    pub blocks: Vec<CompletedBlockRequest>,
 }

@@ -36,6 +36,10 @@ impl Dict {
             .ok_or_else(|| ResponseParseError::ValNotContained(k.to_string()))
     }
 
+    pub fn contains(&self, k: &str) -> bool {
+        self.vals.contains_key(k)
+    }
+
     /// Get a mutable reference to an optional field
     pub fn get_mut(&mut self, k: &str) -> Option<&mut BeValue> {
         self.vals.get_mut(k)

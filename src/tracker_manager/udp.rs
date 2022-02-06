@@ -110,7 +110,8 @@ impl UdpTracker {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 enum TrackerRequestMsg<'h> {
     Connect {
         // Connection ID: 0x41727101980 - u64
@@ -225,21 +226,24 @@ enum TrackerMsgEncodeErr {
     Io(#[from] std::io::Error),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 enum TrackerResponseMsg {
     Connect(ConnectResponseMsg),
     Announce(AnnounceResponseMsg),
     Error(ErrorResponseMsg),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 struct ConnectResponseMsg {
     // action id: u32
     trans_id: u32,
     conn_id: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 struct AnnounceResponseMsg {
     // ation id: u32
     trans_id: u32,
